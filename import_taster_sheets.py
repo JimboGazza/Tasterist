@@ -507,6 +507,22 @@ def main():
     if migrated:
         conn.commit()
 
+    root = Path(args.folder).expanduser().resolve()
+    if not root.exists():
+        raise SystemExit(f"❌ Folder not found: {root}")
+    if not root.is_dir():
+        raise SystemExit(f"❌ Import path is not a folder: {root}")
+
+    candidate_files = [
+        f for f in sorted(root.rglob("*.xlsx"))
+        if not f.name.startswith("~$") and is_supported_workbook(f.name)
+    ]
+    if not candidate_files:
+        raise SystemExit(f"❌ No supported workbook files found in: {root}")
+
+    print(f"\n📂 Importing from OneDrive path:")
+    print(f"   {root}\n")
+
     if args.apply:
         print("\n🔥 Clearing tables")
         conn.execute("DELETE FROM tasters")
@@ -514,14 +530,6 @@ def main():
         conn.commit()
 
     total_t = total_l = 0
-
-    root = Path(args.folder).expanduser().resolve()
-
-    if not root.exists():
-        raise SystemExit(f"❌ Folder not found: {root}")
-
-    print(f"\n📂 Importing from OneDrive path:")
-    print(f"   {root}\n")
 
     fallback_lookup = {}
     if args.fallback_folder:
@@ -532,13 +540,7 @@ def main():
                     continue
                 fallback_lookup.setdefault(fb.name.lower(), fb)
 
-    for file in sorted(root.rglob("*.xlsx")):
-        # skip temp / lock files
-        if file.name.startswith("~$"):
-            continue
-        if not is_supported_workbook(file.name):
-            continue
-
+    for file in candidate_files:
         try:
             # OneDrive placeholder/unavailable files can fail with timeout or bad zip.
             import_path = file

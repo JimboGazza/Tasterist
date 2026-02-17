@@ -113,6 +113,10 @@ def get_import_source_folder():
     if configured:
         return os.path.expanduser(configured)
 
+    render_default = "/var/data/taster-sheets"
+    if _running_in_prod():
+        return render_default
+
     onedrive_default = (
         "/Users/jamesgardner/Library/CloudStorage/OneDrive-Personal/"
         "New Shared Folder/AA Admin/Class Management/Taster Sheets"
@@ -829,14 +833,18 @@ def run_import_process(trigger="manual"):
         timeout_seconds = max(15, int(timeout_raw))
     except ValueError:
         timeout_seconds = 120
+    cmd = [
+        sys.executable,
+        "import_taster_sheets.py",
+        "--folder", import_source,
+        "--apply"
+    ]
+    if os.path.isdir(local_fallback):
+        cmd.extend(["--fallback-folder", local_fallback])
     try:
-        result = subprocess.run([
-            sys.executable,
-            "import_taster_sheets.py",
-            "--folder", import_source,
-            "--fallback-folder", local_fallback,
-            "--apply"
-        ], cwd=BASE_DIR, capture_output=True, text=True, timeout=timeout_seconds)
+        result = subprocess.run(
+            cmd, cwd=BASE_DIR, capture_output=True, text=True, timeout=timeout_seconds
+        )
     except subprocess.TimeoutExpired as exc:
         log_parts = []
         stdout_txt = (exc.stdout or "").strip()
