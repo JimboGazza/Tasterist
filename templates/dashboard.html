@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="container-fluid dashboard-page">
+  <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
+    <div>
+      <h1 class="mb-1 text-white">Hi {{ (current_user.full_name or current_user.username).split(' ')[0] }}</h1>
+      <p class="text-white mb-0">{{ month }}</p>
+    </div>
+    <div class="d-flex gap-2">
+      <a href="{{ url_for('month') }}" class="btn btn-glass">Month</a>
+      <a href="{{ url_for('stats') }}" class="btn btn-glass">Stats</a>
+      <a href="{{ url_for('account_settings') }}" class="btn btn-green">Settings</a>
+    </div>
+  </div>
+
+  <section class="dashboard-card mb-4">
+    <div class="d-flex justify-content-between align-items-center mb-2">
+      <h5 class="mb-0">This Month By Programme</h5>
+      <span class="dashboard-subtle">Live totals</span>
+    </div>
+    <div class="dashboard-programme-list">
+      {% for row in month_by_programme %}
+      <div class="dashboard-programme-row">
+        <div class="dashboard-programme-head">
+          <span class="dashboard-programme-name">{{ row.label }}</span>
+          <span class="dashboard-programme-count">{{ row.count }}</span>
+        </div>
+        <div class="dashboard-programme-bar-track">
+          <div class="dashboard-programme-bar-fill" style="width: {{ row.pct }}%;"></div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <div class="dashboard-metrics mb-4">
+    <section class="dashboard-card">
+      <p class="dashboard-label">Tasters This Month</p>
+      <div class="dashboard-value">{{ tasters }}</div>
+    </section>
+
+    <section class="dashboard-card">
+      <p class="dashboard-label">Leavers This Month</p>
+      <div class="dashboard-value">{{ leavers }}</div>
+    </section>
+
+    <section class="dashboard-card">
+      <p class="dashboard-label">Net Movement</p>
+      <div class="dashboard-value {% if net < 0 %}text-danger{% endif %}">
+        {% if net >= 0 %}+{% endif %}{{ net }}
+      </div>
+      <p class="dashboard-subtle mb-0">{{ days_left }} days left this month</p>
+    </section>
+
+    <section class="dashboard-card">
+      <p class="dashboard-label">Today By Programme</p>
+      <div class="dashboard-pills">
+        {% if todays %}
+          {% for row in todays %}
+          <span class="dashboard-pill">{{ row.programme|title }}: {{ row.c }}</span>
+          {% endfor %}
+        {% else %}
+          <span class="dashboard-pill">No tasters today</span>
+        {% endif %}
+      </div>
+    </section>
+  </div>
+
+  <div class="row g-4">
+    <div class="col-12 col-xl-7">
+      <section class="dashboard-card h-100">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <h5 class="mb-0">Today's Taster List</h5>
+          <span class="dashboard-subtle">{{ today.strftime('%a %d %b') }}</span>
+        </div>
+
+        {% if todays_tasters %}
+          <div class="dashboard-list">
+            {% for t in todays_tasters %}
+            <div class="dashboard-list-row">
+              <div>
+                <strong>{{ t.child }}</strong>
+                <div class="dashboard-subtle">
+                  {{ t.programme|title }}
+                  {% if t.class_name %} • {{ t.class_name }}{% endif %}
+                </div>
+              </div>
+              <span class="dashboard-chip">{{ t.session or "Session TBD" }}</span>
+            </div>
+            {% endfor %}
+          </div>
+        {% else %}
+          <p class="dashboard-subtle mb-0">No tasters booked for today.</p>
+        {% endif %}
+      </section>
+    </div>
+
+    <div class="col-12 col-xl-5">
+      <section class="dashboard-card h-100">
+        <h5 class="mb-3">Quick Actions</h5>
+        <div class="d-grid gap-2">
+          <a href="{{ url_for('add') }}" class="btn btn-green">Add Taster</a>
+          <a href="{{ url_for('add_leaver') }}" class="btn btn-glass">Record Leaver</a>
+          <a href="{{ url_for('month') }}" class="btn btn-glass">Open Month View</a>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <section class="dashboard-card monitor-card mt-4">
+    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
+      <h5 class="mb-0">Monitor</h5>
+      <span class="monitor-pill {{ monitor.class_name }}">{{ monitor.label }}</span>
+    </div>
+    <div class="dashboard-pills">
+      <span class="dashboard-pill">Last Import: {{ monitor.run_at }}</span>
+      <span class="dashboard-pill">Warnings: {{ monitor.warnings }}</span>
+      <span class="dashboard-pill">Import Tasters: {{ monitor.import_total_tasters if monitor.import_total_tasters is not none else "—" }}</span>
+      <span class="dashboard-pill">DB Tasters: {{ monitor.db_total_tasters }}</span>
+    </div>
+  </section>
+</div>
+
+{% endblock %}

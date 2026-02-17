@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Tasterist</title>
+
+  <!-- Bootstrap -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css"
+        rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css"
+        rel="stylesheet">
+
+  <!-- App styles -->
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+
+<body>
+
+<div class="container-fluid">
+  <div class="row min-vh-100 app-shell">
+
+    <!-- SIDEBAR -->
+    <aside class="col-12 col-md-2 col-lg-2 sidebar sidebar-col p-2 d-flex flex-column">
+
+      <!-- Brand -->
+      <div class="logo-wrap mb-4">
+        <div class="logo-mark" aria-hidden="true">
+          <span class="logo-mark-bar"></span>
+          <span class="logo-mark-dot"></span>
+        </div>
+        <div>
+          <h1 class="mb-0 logo">Tasterist</h1>
+          <div class="logo-sub">Class Management</div>
+        </div>
+      </div>
+
+      <!-- PRIMARY NAV -->
+      <div class="nav-section mb-4">
+        <div class="nav-section-title">Overview</div>
+
+        <a class="btn nav-btn w-100 mb-2"
+            href="{{ url_for('dashboard') }}">
+          <i class="bi bi-speedometer2 nav-ico"></i> Dashboard
+        </a>
+
+        <a class="btn nav-btn w-100 mb-2"
+            href="{{ url_for('today') }}">
+          <i class="bi bi-calendar-day nav-ico"></i> Today
+        </a>
+
+        <a class="btn nav-btn w-100 mb-2"
+            href="{{ url_for('month') }}">
+          <i class="bi bi-calendar3 nav-ico"></i> Month
+        </a>
+
+        <a class="btn nav-btn w-100 mb-2"
+            href="{{ url_for('stats') }}">
+          <i class="bi bi-bar-chart nav-ico"></i> Stats
+        </a>
+      </div>
+
+      <!-- ACTIONS -->
+      <div class="nav-section mb-4">
+        <div class="nav-section-title">Actions</div>
+
+        <a class="btn nav-btn w-100 mb-2"
+            href="{{ url_for('add') }}">
+          <i class="bi bi-person-plus nav-ico"></i> Add Taster
+        </a>
+
+        <a class="btn nav-btn w-100 mb-2"
+            href="{{ url_for('add_leaver') }}">
+          <i class="bi bi-person-dash nav-ico"></i> Record Leaver
+        </a>
+
+        <a class="btn nav-btn w-100 mb-2"
+            href="{{ url_for('all_tasters') }}">
+          <i class="bi bi-search nav-ico"></i> Find Taster
+        </a>
+
+        <a class="btn nav-btn w-100 mb-2"
+            href="{{ url_for('admin_tasks') }}">
+          <i class="bi bi-check2-square nav-ico"></i> Admin Tasks
+        </a>
+      </div>
+
+      <!-- PUSH DEV TO BOTTOM -->
+      <div class="mt-auto pt-3 border-top">
+        {% if current_user %}
+        <div class="dropdown dropup mb-2">
+          <button class="sidebar-account sidebar-account-btn w-100" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+            <div class="sidebar-avatar">{{ user_initials(current_user.full_name or current_user.username) }}</div>
+            <div class="sidebar-account-text">
+              <div class="sidebar-account-name">{{ current_user.full_name or current_user.username }}</div>
+              <div class="sidebar-account-email">{{ current_user.username }}</div>
+            </div>
+          </button>
+          <div class="dropdown-menu dropdown-menu-dark w-100 p-2">
+            <a class="dropdown-item" href="{{ url_for('account_settings') }}">
+              <i class="bi bi-person-circle nav-ico"></i> Account Settings
+            </a>
+            {% if is_admin_user %}
+            <a class="dropdown-item" href="{{ url_for('account_admin') }}">
+              <i class="bi bi-shield-lock nav-ico"></i> Admin Console
+            </a>
+            {% endif %}
+            <form method="post" action="{{ url_for('logout') }}" class="mt-2">
+              <button type="submit" class="btn btn-glass btn-sm w-100">
+                <i class="bi bi-box-arrow-right nav-ico"></i> Sign Out
+              </button>
+            </form>
+          </div>
+        </div>
+        {% endif %}
+
+      </div>
+
+    </aside>
+
+    <!-- MAIN CONTENT -->
+    <main class="col-12 col-md-10 col-lg-10 main main-col p-4">
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          {% for category, msg in messages %}
+            <div class="alert alert-{{ category }} mb-3">
+              {{ msg }}
+            </div>
+          {% endfor %}
+        {% endif %}
+      {% endwith %}
+
+      {% block content %}{% endblock %}
+
+    </main>
+
+  </div>
+</div>
+
+<!-- Bootstrap JS (for dropdown) -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+
+</body>
+</html>

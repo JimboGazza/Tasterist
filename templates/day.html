@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+  <a class="btn btn-glass btn-sm"
+      href="{{ url_for('month',
+        y=selected_date.year,
+        m=selected_date.month,
+        programme=programme) }}">
+      ← Back to month
+  </a>
+  <div class="btn-group">
+    <a href="{{ url_for('day_detail', date_str=selected_date.isoformat(), programme='lockwood') }}"
+        class="btn btn-sm {% if programme=='lockwood' %}btn-green{% else %}btn-glass{% endif %}">
+      Lockwood
+    </a>
+    <a href="{{ url_for('day_detail', date_str=selected_date.isoformat(), programme='honley') }}"
+        class="btn btn-sm {% if programme=='honley' %}btn-green{% else %}btn-glass{% endif %}">
+      Honley
+    </a>
+    <a href="{{ url_for('day_detail', date_str=selected_date.isoformat(), programme='preschool') }}"
+        class="btn btn-sm {% if programme=='preschool' %}btn-green{% else %}btn-glass{% endif %}">
+      Preschool
+    </a>
+  </div>
+</div>
+
+<div class="day-title-wrap mb-4">
+  <h1 class="day-title-main mb-0">{{ selected_date.strftime('%A %d %B %Y') }}</h1>
+  <div class="day-nav-row">
+    <a class="btn btn-glass btn-sm day-nav-btn" href="{{ url_for('day_detail', date_str=prev_date.isoformat(), programme=programme) }}">Prev</a>
+    <a class="btn btn-glass btn-sm day-nav-btn" href="{{ url_for('day_detail', date_str=today_date.isoformat(), programme=programme) }}">Today</a>
+    <a class="btn btn-glass btn-sm day-nav-btn" href="{{ url_for('day_detail', date_str=next_date.isoformat(), programme=programme) }}">Next</a>
+  </div>
+</div>
+
+{% if data.empty %}
+  <div class="day-empty-state">
+    <div class="alert alert-dark border">
+      {% if selected_date == today_date %}
+      No tasters today!
+      {% else %}
+      No tasters booked for this day.
+      {% endif %}
+    </div>
+  </div>
+{% else %}
+
+  {% for session, rows in data.groupby('session') %}
+  <div class="day-session mb-4">
+
+    <!-- SESSION HEADER -->
+    <div class="session-header">
+      {{ session or selected_date.strftime('%A') }}
+    </div>
+
+    <div class="day-session-body">
+
+      {% for r in rows.itertuples() %}
+      <div class="day-row">
+
+        <!-- LEFT -->
+        <div class="day-info">
+          <div class="day-name">{{ r.child }}</div>
+          {% if r.notes %}
+            <div class="day-notes">{{ r.notes }}</div>
+          {% endif %}
+        </div>
+
+        <!-- RIGHT -->
+        <div class="day-actions">
+
+          <form method="post" action="{{ url_for('toggle', taster_id=r.id, field='attended') }}">
+            <button class="toggle-btn attended {% if r.attended %}active{% endif %}">
+              Attended
+            </button>
+          </form>
+
+          <form method="post" action="{{ url_for('toggle', taster_id=r.id, field='bg') }}">
+            <button class="toggle-btn bg {% if r.bg %}active{% endif %}">
+              BG
+            </button>
+          </form>
+
+          <form method="post" action="{{ url_for('toggle', taster_id=r.id, field='badge') }}">
+            <button class="toggle-btn badge {% if r.badge %}active{% endif %}">
+              Badge
+            </button>
+          </form>
+
+        </div>
+
+      </div>
+      {% endfor %}
+
+    </div>
+  </div>
+  {% endfor %}
+
+{% endif %}
+
+{% endblock %}

@@ -1,0 +1,169 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="add-page">
+  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+    <div>
+      <h2 class="text-white mb-1">Record Leaver</h2>
+      <p class="text-white mb-0">Select a class in the week grid, then record the leaver details.</p>
+    </div>
+    <div class="btn-group">
+      <a href="{{ url_for('add_leaver', programme='lockwood', week_start=week_start.isoformat()) }}"
+          class="btn btn-sm {% if programme=='lockwood' %}btn-green{% else %}btn-glass{% endif %}">
+        Lockwood
+      </a>
+      <a href="{{ url_for('add_leaver', programme='honley', week_start=week_start.isoformat()) }}"
+          class="btn btn-sm {% if programme=='honley' %}btn-green{% else %}btn-glass{% endif %}">
+        Honley
+      </a>
+      <a href="{{ url_for('add_leaver', programme='preschool', week_start=week_start.isoformat()) }}"
+          class="btn btn-sm {% if programme=='preschool' %}btn-green{% else %}btn-glass{% endif %}">
+        Preschool
+      </a>
+    </div>
+  </div>
+
+  <div id="weekPickerWrap">
+    <div class="add-week-controls mb-3">
+      <a href="{{ url_for('add_leaver', programme=programme, week_start=prev_week) }}" class="btn btn-glass btn-sm">← Prev</a>
+      <a href="{{ url_for('add_leaver', programme=programme, week_start=today_str) }}" class="btn btn-glass btn-sm">Today</a>
+      <span class="add-week-label">{{ week_start.strftime('%d %b %Y') }} - {{ week_end.strftime('%d %b %Y') }}</span>
+      <a href="{{ url_for('add_leaver', programme=programme, week_start=next_week) }}" class="btn btn-glass btn-sm">Next →</a>
+    </div>
+
+    <div class="add-week-grid mb-3">
+    {% for day in week_days %}
+    <section class="add-day-column">
+      <header class="add-day-header">
+        <div class="add-day-name">{{ day.day_name }}</div>
+        <div class="add-day-date">{{ day.date_obj.strftime('%d %b %Y') }}</div>
+      </header>
+      <div class="add-day-body">
+        {% if day.sessions %}
+          {% for s in day.sessions %}
+          <button type="button"
+                  class="session-tile"
+                  data-date="{{ day.date_str }}"
+                  data-session="{{ s.session_value }}"
+                  data-class-name="{{ s.class_name }}"
+                  data-time="{{ s.time_range }}">
+            <div class="session-tile-title">{{ s.class_name }}</div>
+            <div class="session-tile-time">{{ s.time_range }}</div>
+            <div class="session-tile-chip">Upcoming: {{ s.upcoming_count }}</div>
+          </button>
+          {% endfor %}
+        {% else %}
+          <div class="session-empty">No classes for this day</div>
+        {% endif %}
+      </div>
+    </section>
+    {% endfor %}
+    </div>
+  </div>
+
+  <button id="manualSelectBtn" type="button" class="btn btn-glass mb-3">
+    Add Manual Session Instead
+  </button>
+
+  <div id="addLeaverPanel" class="card-form add-taster-panel d-none">
+    <div class="selected-session-box mb-3">
+      <div id="selectedSessionTitle" class="selected-session-title">Select a class to begin</div>
+      <div id="selectedSessionMeta" class="selected-session-meta">No class selected yet</div>
+    </div>
+
+    <form method="post">
+      <input type="hidden" name="programme" value="{{ programme }}">
+      <input type="hidden" name="session" id="sessionValueInput">
+      <input type="hidden" name="class_name" id="classNameInput">
+
+      <div class="mb-3">
+        <label class="form-label">Child Name</label>
+        <input name="child" class="form-control" required>
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label">Leave Date</label>
+        <input id="leaveDateInput" type="date" name="leave_date" class="form-control" value="{{ today_str }}" required>
+      </div>
+
+      <div id="manualSessionWrap" class="mb-3 d-none">
+        <label class="form-label">Manual Session</label>
+        <input id="manualSessionInput" name="manual_session" class="form-control" placeholder="e.g. Tuesday 16:00">
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label">Parent Email (optional)</label>
+        <input name="email" class="form-control" type="email" placeholder="name@example.com">
+      </div>
+
+      <label class="form-check mb-3">
+        <input class="form-check-input" type="checkbox" name="sync_excel" value="1" checked>
+        <span class="form-check-label">Also write this update to the OneDrive Excel sheet</span>
+      </label>
+
+      <button class="btn btn-green w-100">Save Leaver</button>
+    </form>
+  </div>
+</div>
+
+<script>
+const panel = document.getElementById("addLeaverPanel");
+const weekPickerWrap = document.getElementById("weekPickerWrap");
+const tiles = Array.from(document.querySelectorAll(".session-tile"));
+const sessionValueInput = document.getElementById("sessionValueInput");
+const classNameInput = document.getElementById("classNameInput");
+const leaveDateInput = document.getElementById("leaveDateInput");
+const manualWrap = document.getElementById("manualSessionWrap");
+const manualInput = document.getElementById("manualSessionInput");
+const selectedTitle = document.getElementById("selectedSessionTitle");
+const selectedMeta = document.getElementById("selectedSessionMeta");
+const manualSelectBtn = document.getElementById("manualSelectBtn");
+const defaultDate = "{{ today_str }}";
+
+function showPanel() {
+  panel.classList.remove("d-none");
+}
+
+function selectClass(tile) {
+  const dateStr = tile.dataset.date;
+  const session = tile.dataset.session;
+  const className = tile.dataset.className;
+  const timeRange = tile.dataset.time;
+
+  showPanel();
+  weekPickerWrap.classList.add("d-none");
+  sessionValueInput.value = session;
+  classNameInput.value = className;
+  leaveDateInput.value = leaveDateInput.value || defaultDate;
+  manualWrap.classList.add("d-none");
+  manualInput.required = false;
+  manualInput.value = "";
+
+  selectedTitle.textContent = className;
+  selectedMeta.textContent = `${dateStr} • ${timeRange}`;
+
+  tiles.forEach((t) => t.classList.remove("active"));
+  tile.classList.add("active");
+}
+
+function selectManual() {
+  showPanel();
+  weekPickerWrap.classList.remove("d-none");
+  sessionValueInput.value = "__manual__";
+  classNameInput.value = "Manual Session";
+  leaveDateInput.value = leaveDateInput.value || defaultDate;
+  manualWrap.classList.remove("d-none");
+  manualInput.required = true;
+  selectedTitle.textContent = "Manual Session";
+  selectedMeta.textContent = "Enter a custom session label.";
+  tiles.forEach((t) => t.classList.remove("active"));
+}
+
+tiles.forEach((tile) => {
+  tile.addEventListener("click", () => selectClass(tile));
+});
+
+manualSelectBtn.addEventListener("click", selectManual);
+</script>
+
+{% endblock %}

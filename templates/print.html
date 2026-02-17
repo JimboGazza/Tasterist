@@ -1,0 +1,42 @@
+<!doctype html>
+<html>
+<head>
+  <title>Print — Tasters</title>
+  <style>
+    body { font-family: Arial; }
+    table { width:100%; border-collapse: collapse; }
+    th, td { border:1px solid black; padding:6px; }
+  </style>
+</head>
+<body>
+
+<h2>Today's Tasters — {{ today }} ({{ location }})</h2>
+
+<table>
+  <tr>
+    <th>Name</th>
+    <th>Class</th>
+    <th>Notes</th>
+    <th>Attended</th>
+    <th>BG</th>
+    <th>Badge</th>
+  </tr>
+
+  {% for r in data.itertuples() %}
+  <tr>
+    <td>{{ r.child }}</td>
+    <td>{{ r.session }}</td>
+    <td>{{ r.notes }}</td>
+    <td>{{ "Yes" if r.attended==1 else "No" }}</td>
+    <td>{{ "Yes" if r.bg==1 else "No" }}</td>
+    <td>{{ "Yes" if r.badge==1 else "No" }}</td>
+  </tr>
+  {% endfor %}
+</table>
+
+<script>
+  window.print();
+</script>
+
+</body>
+</html>

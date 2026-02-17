@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="container-fluid admin-tasks-page">
+  <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+    <div>
+      <h2 class="text-white mb-1">Admin Tasks</h2>
+      <p class="text-white mb-0">Tasks for {{ today }}{% if has_custom_assignments %} based on your admin days{% endif %}.</p>
+    </div>
+    <a href="{{ url_for('account_settings') }}" class="btn btn-glass">Edit Admin Days</a>
+  </div>
+
+  {% if has_custom_assignments %}
+  <div class="dashboard-card mb-3">
+    <p class="dashboard-label">Your Admin Days</p>
+    <div class="dashboard-pills">
+      {% for a in assignments %}
+      <span class="dashboard-pill">{{ a.day_name }} • {{ a.programme|title }}</span>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="dashboard-card mb-4">
+    <h5 class="mb-2">Follow-ups: Attended But Missing Checks</h5>
+    <p class="dashboard-subtle mb-3">Past couple of months only (from {{ cutoff }}).</p>
+    <div class="task-columns">
+      {% for a in assignments %}
+      {% set key = a.day_name ~ '|' ~ a.programme %}
+      <section class="task-column">
+        <header class="task-column-head">{{ a.day_name }} • {{ a.programme|title }}</header>
+        <div class="task-column-body">
+          {% set rows = pending_by_assignment.get(key, []) %}
+          {% if rows %}
+            {% for t in rows %}
+            <div class="task-row">
+              <div class="task-row-info">
+                <div class="task-row-name">{{ t.child }}</div>
+                <div class="dashboard-subtle">{{ t.taster_date }} • {{ t.session }}</div>
+              </div>
+              <div class="task-row-actions">
+                <form method="post" action="{{ url_for('toggle', taster_id=t.id, field='bg') }}">
+                  <button class="toggle-btn bg {% if t.bg %}active{% endif %}">
+                    BG
+                  </button>
+                </form>
+                <form method="post" action="{{ url_for('toggle', taster_id=t.id, field='badge') }}">
+                  <button class="toggle-btn badge {% if t.badge %}active{% endif %}">
+                    Badge
+                  </button>
+                </form>
+              </div>
+            </div>
+            {% endfor %}
+          {% else %}
+            <div class="task-empty">No follow-ups.</div>
+          {% endif %}
+        </div>
+      </section>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="dashboard-card mb-4">
+    <h5 class="mb-2">No Shows (Contact For Reschedule)</h5>
+    <p class="dashboard-subtle mb-3">Past couple of months only (from {{ cutoff }}).</p>
+    <div class="task-columns">
+      {% for a in assignments %}
+      {% set key = a.day_name ~ '|' ~ a.programme %}
+      <section class="task-column">
+        <header class="task-column-head">{{ a.day_name }} • {{ a.programme|title }}</header>
+        <div class="task-column-body">
+          {% set rows = no_show_by_assignment.get(key, []) %}
+          {% if rows %}
+            {% for t in rows %}
+            <div class="task-row">
+              <div class="task-row-info">
+                <div class="task-row-name">{{ t.child }}</div>
+                <div class="dashboard-subtle">{{ t.taster_date }} • {{ t.session }}</div>
+              </div>
+              <form method="post" action="{{ url_for('admin_mark_contacted', taster_id=t.id) }}">
+                <button class="btn btn-green btn-sm task-contact-btn">Contacted</button>
+              </form>
+            </div>
+            {% endfor %}
+          {% else %}
+            <div class="task-empty">No no-shows.</div>
+          {% endif %}
+        </div>
+      </section>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="dashboard-card mt-4">
+    <h5 class="mb-2">Leavers Counts ({{ month_label }})</h5>
+    <p class="dashboard-subtle mb-3">Totals by your admin-day ownership for the current month.</p>
+    <div class="task-columns">
+      {% for a in assignments %}
+      {% set key = a.day_name ~ '|' ~ a.programme %}
+      <section class="task-column">
+        <header class="task-column-head d-flex justify-content-between align-items-center">
+          <span>{{ a.day_name }} • {{ a.programme|title }}</span>
+          <span class="dashboard-chip">{{ leaver_count_by_assignment.get(key, 0) }}</span>
+        </header>
+        <div class="task-column-body">
+          {% set rows = leaver_rows_by_assignment.get(key, []) %}
+          {% if rows %}
+            {% for l in rows[:8] %}
+            <div class="task-row">
+              <div class="task-row-info">
+                <div class="task-row-name">{{ l.child }}</div>
+                <div class="dashboard-subtle">
+                  {{ l.leave_date or "Date not set" }}
+                  {% if l.inferred %} • ? inferred{% endif %}
+                  {% if l.class_name %} • {{ l.class_name }}{% endif %}
+                  {% if l.session %} • {{ l.session }}{% endif %}
+                </div>
+              </div>
+            </div>
+            {% endfor %}
+          {% else %}
+            <div class="task-empty">No leavers this month.</div>
+          {% endif %}
+        </div>
+      </section>
+      {% endfor %}
+    </div>
+    {% if unassigned_leavers %}
+    <div class="dashboard-card mt-3">
+      <h6 class="mb-2">Unknown Day/Time Leavers (?)</h6>
+      <p class="dashboard-subtle mb-2">These are in this month but missing a usable date/day in source sheets.</p>
+      <div class="dashboard-pills mb-2">
+        {% for k, count in unknown_counts.items() %}
+          {% set programme = k.split('|')[1] %}
+          <span class="dashboard-pill">? • {{ programme|title }}: {{ count }}</span>
+        {% endfor %}
+      </div>
+      <div class="dashboard-list">
+        {% for l in unassigned_leavers %}
+        <div class="dashboard-list-row">
+          <div>
+            <strong>{{ l.child }}</strong>
+            <div class="dashboard-subtle">{{ l.programme|title }}{% if l.class_name %} • {{ l.class_name }}{% endif %}</div>
+          </div>
+          <span class="dashboard-chip">{{ l.leave_date or "?" }}</span>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+{% endblock %}

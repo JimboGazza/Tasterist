@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: tasterist
+    env: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn wsgi:app --bind 0.0.0.0:$PORT
+    healthCheckPath: /health
+    envVars:
+      - key: TASTERIST_SECRET_KEY
+        generateValue: true
+      - key: TASTERIST_DB_FILE
+        value: /var/data/tasterist.db
+      - key: TASTER_SHEETS_FOLDER
+        sync: false
+    disk:
+      name: tasterist-data
+      mountPath: /var/data
+      sizeGB: 5

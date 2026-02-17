@@ -1,0 +1,159 @@
+{% extends "base.html" %}
+{% block content %}
+
+<!-- ===================================================== -->
+<!-- HEADER -->
+<!-- ===================================================== -->
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+
+  <div>
+    <h2 class="fw-bold mb-0">{{ location }}</h2>
+    <h2 class="month-heading">{{ month_name }} {{ year }}</h2>
+  </div>
+
+  <!-- Programme Switcher -->
+  <div class="btn-group">
+    <a href="{{ url_for('month', programme='lockwood', m=month, y=year) }}"
+        class="btn btn-sm {% if programme=='lockwood' %}btn-green{% else %}btn-glass{% endif %}">
+      Lockwood
+    </a>
+
+    <a href="{{ url_for('month', programme='honley', m=month, y=year) }}"
+        class="btn btn-sm {% if programme=='honley' %}btn-green{% else %}btn-glass{% endif %}">
+      Honley
+    </a>
+
+    <a href="{{ url_for('month', programme='preschool', m=month, y=year) }}"
+        class="btn btn-sm {% if programme=='preschool' %}btn-green{% else %}btn-glass{% endif %}">
+      Preschool
+    </a>
+  </div>
+
+</div>
+
+<!-- ===================================================== -->
+<!-- MONTH NAV -->
+<!-- ===================================================== -->
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+
+  <a class="btn btn-glass btn-sm"
+      href="{{ url_for('month',
+                      programme=programme,
+                      m=month-1 if month>1 else 12,
+                      y=year if month>1 else year-1) }}">
+    ← Prev
+  </a>
+
+  <span></span>
+
+  <a class="btn btn-glass btn-sm"
+      href="{{ url_for('month',
+                      programme=programme,
+                      m=month+1 if month<12 else 1,
+                      y=year if month<12 else year+1) }}">
+    Next →
+  </a>
+
+</div>
+
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  const monthJumpForm = document.getElementById("monthJumpForm");
+  const monthSelect = document.getElementById("monthSelect");
+  const yearSelect = document.getElementById("yearSelect");
+  if (!monthJumpForm || !monthSelect || !yearSelect) return;
+  monthSelect.addEventListener("change", () => monthJumpForm.submit());
+  yearSelect.addEventListener("change", () => monthJumpForm.submit());
+});
+</script>
+
+<!-- ===================================================== -->
+<!-- WEEKDAY HEADERS -->
+<!-- ===================================================== -->
+
+<div class="row text-center fw-bold mb-2">
+  {% for wd in ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'] %}
+    <div class="col month-weekday">
+      {{ wd }}
+    </div>
+  {% endfor %}
+</div>
+
+
+<!-- ===================================================== -->
+<!-- CALENDAR GRID -->
+<!-- ===================================================== -->
+
+{% for week in month_matrix %}
+<div class="row mb-2">
+
+  {% for daynum in week %}
+  <div class="col">
+
+    {% if daynum == 0 %}
+      <div class="day-box empty"></div>
+
+    {% elif daynum <= calendar.monthrange(year, month)[1] %}
+
+      {% set cell_date = datetime(year, month, daynum).date() %}
+      {% set day_rows = month_df[month_df['taster_date'] == cell_date] %}
+      {% set date_str = "%04d-%02d-%02d" % (year, month, daynum) %}
+
+      <a href="{{ url_for('day_detail',
+                          date_str=date_str,
+                          programme=programme) }}"
+        class="text-decoration-none">
+
+        <div class="day-box {% if cell_date == today_date %}today-cell{% endif %}">
+
+          <div class="day-number">{{ daynum }}</div>
+
+          {% if not day_rows.empty %}
+            <div class="initials-row">
+              {% for r in day_rows.head(4).itertuples() %}
+                {% set parts = (r.child or '').split() %}
+                {% set initials = (parts[0][0] + (parts[1][0] if parts|length > 1 else '')).upper() %}
+                <span class="initial-circle">{{ initials }}</span>
+              {% endfor %}
+
+              {% if day_rows|length > 4 %}
+                <span class="initial-circle more-circle">
+                  +{{ day_rows|length - 4 }}
+                </span>
+              {% endif %}
+            </div>
+          {% endif %}
+
+        </div>
+      </a>
+
+    {% else %}
+      <div class="day-box empty"></div>
+    {% endif %}
+
+  </div>
+  {% endfor %}
+
+</div>
+{% endfor %}
+
+<form id="monthJumpForm" method="get" action="{{ url_for('month') }}" class="month-jump-form mt-3">
+  <input type="hidden" name="programme" value="{{ programme }}">
+  <label class="month-jump-label" for="monthSelect">Jump To</label>
+  <select id="monthSelect" name="m" class="form-select form-select-sm month-jump-select">
+    {% for m_num in range(1, 13) %}
+    <option value="{{ m_num }}" {% if m_num == month %}selected{% endif %}>
+      {{ calendar.month_name[m_num] }}
+    </option>
+    {% endfor %}
+  </select>
+  <select id="yearSelect" name="y" class="form-select form-select-sm month-jump-select year">
+    {% for yv in year_options %}
+    <option value="{{ yv }}" {% if yv == year %}selected{% endif %}>{{ yv }}</option>
+    {% endfor %}
+  </select>
+</form>
+
+{% endblock %}

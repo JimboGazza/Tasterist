@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="container-fluid stats-page">
+  <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+    <h1 class="text-white mb-0">Stats</h1>
+    <a href="{{ url_for('dashboard') }}" class="btn btn-glass">Back</a>
+  </div>
+
+  <div class="dashboard-metrics mb-4">
+    <section class="dashboard-card">
+      <p class="dashboard-label">Latest Month</p>
+      <div class="dashboard-value">{{ totals.latest_month }}</div>
+    </section>
+    <section class="dashboard-card">
+      <p class="dashboard-label">Total Tasters</p>
+      <div class="dashboard-value">{{ totals.tasters_all }}</div>
+    </section>
+    <section class="dashboard-card">
+      <p class="dashboard-label">Total Leavers</p>
+      <div class="dashboard-value">{{ totals.leavers_all }}</div>
+    </section>
+    <section class="dashboard-card">
+      <p class="dashboard-label">All-Time Net</p>
+      <div class="dashboard-value">{{ totals.net_all }}</div>
+      <p class="dashboard-subtle mb-0">{{ totals.months_tracked }} months tracked</p>
+    </section>
+  </div>
+
+  <div class="dashboard-card mb-4">
+    <canvas id="chart" height="110"></canvas>
+  </div>
+
+  <div class="row g-4">
+    <div class="col-12 col-xl-7">
+      <div class="dashboard-card h-100">
+        <h5 class="mb-2">Monthly Table (Latest First)</h5>
+        <div class="table-responsive">
+          <table class="table table-dark table-striped table-sm mb-0 tasters-table">
+            <thead>
+              <tr>
+                <th>Month</th>
+                <th>Tasters</th>
+                <th>Leavers</th>
+                <th>Net</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for r in monthly %}
+              <tr class="{% if r.month == current_month %}current-month-row{% endif %}">
+                <td>{{ r.month }}</td>
+                <td>{{ r.tasters }}</td>
+                <td>{{ r.leavers }}</td>
+                <td>{% if (r.tasters - r.leavers) >= 0 %}+{% endif %}{{ r.tasters - r.leavers }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div class="col-12 col-xl-5">
+      <div class="dashboard-card h-100">
+        <h5 class="mb-2">This Month By Programme</h5>
+        {% if this_month_programme %}
+          <div class="dashboard-list">
+            {% for p in this_month_programme %}
+            <div class="dashboard-list-row">
+              <strong>{{ p.programme|title }}</strong>
+              <span class="dashboard-chip">{{ p.count }}</span>
+            </div>
+            {% endfor %}
+          </div>
+        {% else %}
+          <p class="dashboard-subtle mb-0">No taster activity this month yet.</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script>
+const chartData = {
+  labels: [{% for r in monthly_chart %}"{{ r.month }}",{% endfor %}],
+  datasets: [
+    {
+      label: "Tasters",
+      data: [{% for r in monthly_chart %}{{ r.tasters }},{% endfor %}],
+      borderColor: "#4ade80",
+      backgroundColor: "rgba(74, 222, 128, 0.15)",
+      tension: 0.3,
+      fill: true
+    },
+    {
+      label: "Leavers",
+      data: [{% for r in monthly_chart %}{{ r.leavers }},{% endfor %}],
+      borderColor: "#f97316",
+      backgroundColor: "rgba(249, 115, 22, 0.08)",
+      tension: 0.3,
+      fill: true
+    }
+  ]
+};
+
+new Chart(document.getElementById("chart"), {
+  type: "line",
+  data: chartData,
+  options: {
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        labels: { color: "#d1fae5" }
+      }
+    },
+    scales: {
+      x: { ticks: { color: "#9ca3af" }, grid: { color: "rgba(255,255,255,0.05)" } },
+      y: { ticks: { color: "#9ca3af" }, grid: { color: "rgba(255,255,255,0.05)" }, beginAtZero: true }
+    }
+  }
+});
+</script>
+
+{% endblock %}

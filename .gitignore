@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+
+# Local databases and journals
+*.db
+*.db-journal
+
+# OS/editor noise
+.DS_Store
+.vscode/
+.idea/
+
+# Runtime/import artifacts
+import_previews/last_import.log
+import_previews/last_import_meta.json
+import_previews/*.csv
+
+# Local working data exports
+csv_exports/
+Taster Sheets/
+Events_from_*.csv
+tasters_import.csv
+Past Versions/
+Testing Checklist
+SELECT
+Tasterist.code-workspace
+
+# Environment overrides
+.env
+.env.*

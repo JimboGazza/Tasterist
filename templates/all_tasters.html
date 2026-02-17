@@ -1,0 +1,177 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container-fluid mt-2 all-tasters-page">
+  <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+    <div>
+      <h2 class="text-white mb-1">Find Taster</h2>
+      <p class="text-white mb-0">Search and filter all records in one list.</p>
+    </div>
+    <a href="{{ url_for('dashboard') }}" class="btn btn-glass">Back to Dashboard</a>
+  </div>
+
+  <div class="find-layout">
+    <aside class="table-card find-filters">
+      <div class="filter-title">Search</div>
+      <input id="searchInput" class="form-control mb-2" placeholder="Name, class, session, date, notes...">
+
+      <div class="filter-group">
+        <div class="filter-title">Record Type</div>
+        <div class="filter-check"><input id="typeTaster" type="checkbox" name="f_type" value="taster" checked><label for="typeTaster">Taster</label></div>
+        <div class="filter-check"><input id="typeLeaver" type="checkbox" name="f_type" value="leaver" checked><label for="typeLeaver">Leaver</label></div>
+      </div>
+
+      <div class="filter-group">
+        <div class="filter-title">Programme</div>
+        <div class="filter-check"><input id="pLockwood" type="checkbox" name="f_programme" value="lockwood" checked><label for="pLockwood">Lockwood</label></div>
+        <div class="filter-check"><input id="pHonley" type="checkbox" name="f_programme" value="honley" checked><label for="pHonley">Honley</label></div>
+        <div class="filter-check"><input id="pPreschool" type="checkbox" name="f_programme" value="preschool" checked><label for="pPreschool">Preschool</label></div>
+      </div>
+
+      <div class="filter-group">
+        <div class="filter-title">Attended (Tasters)</div>
+        <div class="filter-check"><input id="aYes" type="checkbox" name="f_attended" value="yes" checked><label for="aYes">Yes</label></div>
+        <div class="filter-check"><input id="aNo" type="checkbox" name="f_attended" value="no" checked><label for="aNo">No</label></div>
+      </div>
+
+      <div class="filter-group">
+        <div class="filter-title">BG (Tasters)</div>
+        <div class="filter-check"><input id="bgYes" type="checkbox" name="f_bg" value="yes" checked><label for="bgYes">Yes</label></div>
+        <div class="filter-check"><input id="bgNo" type="checkbox" name="f_bg" value="no" checked><label for="bgNo">No</label></div>
+      </div>
+
+      <div class="filter-group">
+        <div class="filter-title">Badge (Tasters)</div>
+        <div class="filter-check"><input id="bdYes" type="checkbox" name="f_badge" value="yes" checked><label for="bdYes">Yes</label></div>
+        <div class="filter-check"><input id="bdNo" type="checkbox" name="f_badge" value="no" checked><label for="bdNo">No</label></div>
+      </div>
+    </aside>
+
+    <section class="find-results">
+      <div class="table-card mb-3">
+        <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+          <h5 class="mb-0 text-white">Records</h5>
+          <span id="recordCount" class="table-result-chip"></span>
+        </div>
+        <div class="table-responsive">
+          <table class="table table-dark table-striped table-sm align-middle mb-0 tasters-table">
+            <thead>
+              <tr>
+                <th>Type</th>
+                <th>Name</th>
+                <th>Programme</th>
+                <th>Class</th>
+                <th>Session</th>
+                <th class="tasters-date-col">Date</th>
+                <th>Attended</th>
+                <th>BG</th>
+                <th>Badge</th>
+                <th>Notes / Source</th>
+              </tr>
+            </thead>
+            <tbody id="recordTableBody">
+              {% for t in tasters %}
+              <tr
+                data-type="taster"
+                data-programme="{{ t.programme }}"
+                data-attended="{{ 'yes' if t.attended else 'no' }}"
+                data-bg="{{ 'yes' if t.bg else 'no' }}"
+                data-badge="{{ 'yes' if t.badge else 'no' }}"
+                data-search="{{ (t.child ~ ' ' ~ t.programme ~ ' ' ~ (t.class_name or '') ~ ' ' ~ t.session ~ ' ' ~ t.taster_date ~ ' ' ~ (t.notes or ''))|lower }}">
+                <td><span class="table-flag is-yes">Taster</span></td>
+                <td>{{ t.child }}</td>
+                <td>{{ t.programme|title }}</td>
+                <td>{{ t.class_name or '—' }}</td>
+                <td>{{ t.session }}</td>
+                <td class="tasters-date-col">{{ t.taster_date }}</td>
+                <td><span class="table-flag {% if t.attended %}is-yes{% else %}is-no{% endif %}">{{ "Yes" if t.attended else "No" }}</span></td>
+                <td><span class="table-flag {% if t.bg %}is-yes{% else %}is-no{% endif %}">{{ "Yes" if t.bg else "No" }}</span></td>
+                <td><span class="table-flag {% if t.badge %}is-yes{% else %}is-no{% endif %}">{{ "Yes" if t.badge else "No" }}</span></td>
+                <td>{{ t.notes }}</td>
+              </tr>
+              {% endfor %}
+              {% for l in leavers %}
+              <tr
+                data-type="leaver"
+                data-programme="{{ l.programme }}"
+                data-attended="na"
+                data-bg="na"
+                data-badge="na"
+                data-search="{{ (l.child ~ ' ' ~ l.programme ~ ' ' ~ (l.class_name or '') ~ ' ' ~ (l.session or '') ~ ' ' ~ (l.leave_date or '') ~ ' ' ~ (l.email or '') ~ ' ' ~ (l.source or ''))|lower }}">
+                <td><span class="table-flag is-no">Leaver</span></td>
+                <td>{{ l.child }}</td>
+                <td>{{ l.programme|title }}</td>
+                <td>{{ l.class_name or "—" }}</td>
+                <td>{{ l.session or "—" }}</td>
+                <td class="tasters-date-col">{{ l.leave_date or l.leave_month }}</td>
+                <td>—</td>
+                <td>—</td>
+                <td>—</td>
+                <td>{{ l.source or "manual" }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<script>
+const searchInput = document.getElementById("searchInput");
+const rows = Array.from(document.querySelectorAll("#recordTableBody tr"));
+const recordCount = document.getElementById("recordCount");
+const filterInputs = Array.from(document.querySelectorAll("input[type='checkbox']"));
+
+function selected(name) {
+  return Array.from(document.querySelectorAll(`input[name='${name}']:checked`)).map((el) => el.value);
+}
+
+function applyFilters() {
+  const query = searchInput.value.trim().toLowerCase();
+  const types = selected("f_type");
+  const programmes = selected("f_programme");
+  const attended = selected("f_attended");
+  const bg = selected("f_bg");
+  const badge = selected("f_badge");
+
+  let shown = 0;
+  rows.forEach((row) => {
+    const type = row.dataset.type;
+    if (!types.includes(type)) {
+      row.classList.add("d-none");
+      return;
+    }
+    if (!programmes.includes(row.dataset.programme)) {
+      row.classList.add("d-none");
+      return;
+    }
+    if (query && !row.dataset.search.includes(query)) {
+      row.classList.add("d-none");
+      return;
+    }
+    if (type === "taster") {
+      if (!attended.includes(row.dataset.attended)) {
+        row.classList.add("d-none");
+        return;
+      }
+      if (!bg.includes(row.dataset.bg)) {
+        row.classList.add("d-none");
+        return;
+      }
+      if (!badge.includes(row.dataset.badge)) {
+        row.classList.add("d-none");
+        return;
+      }
+    }
+    row.classList.remove("d-none");
+    shown += 1;
+  });
+  recordCount.textContent = `${shown} shown`;
+}
+
+searchInput.addEventListener("input", applyFilters);
+filterInputs.forEach((input) => input.addEventListener("change", applyFilters));
+applyFilters();
+</script>
+{% endblock %}

@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block content %}
+
+<h1 class="text-white mb-3">Developer Panel</h1>
+
+<div class="card-form mb-4">
+
+  <h5 class="text-white">Database Tools</h5>
+
+  <form method="post">
+    <button name="action" value="clear"
+            class="btn btn-danger w-100 mb-2">
+      DELETE ALL TASTERS
+    </button>
+  </form>
+
+  <hr class="text-white">
+
+  <a href="{{ url_for('import_run') }}" class="btn btn-glass me-2">
+    Run Import
+  </a>
+  <a href="{{ url_for('all_tasters') }}" class="btn btn-glass">
+    View All Tasters
+  </a>
+
+
+</div>
+
+{% endblock %}

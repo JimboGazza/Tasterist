@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="container-fluid import-page">
+  <div class="import-header mb-4">
+    <h1 class="text-white mb-1">Data Import</h1>
+    <p class="text-muted mb-0">
+      Run the workbook importer and review the latest result in a cleaner log view.
+    </p>
+  </div>
+
+  <div class="import-card mb-4">
+    <div class="import-card-body">
+      <h5 class="mb-2">Run Importer</h5>
+      <p class="text-muted small mb-3">
+        Reads all supported `.xlsx` files from this source folder, then refreshes tasters/leavers data.
+      </p>
+      <p class="small mb-3">
+        <code>{{ import_source }}</code>
+      </p>
+      <div class="import-file-tags mb-4">
+        <span class="import-tag">Lockwood</span>
+        <span class="import-tag">Honley</span>
+        <span class="import-tag">Preschool</span>
+        <span class="import-tag">2025 + 2026</span>
+      </div>
+      <a href="{{ url_for('import_run') }}" class="btn btn-green btn-lg w-100 import-run-btn">
+        Run Import Now
+      </a>
+    </div>
+  </div>
+
+  {% if last_import %}
+  <div class="import-card mb-4">
+    <div class="import-card-body">
+      <div class="import-log-head mb-3">
+        <h5 class="mb-2">Last Import</h5>
+        <div class="import-meta">
+          <span class="import-meta-item">
+            Run at: <strong>{{ last_import.run_at }}</strong>
+          </span>
+          {% if last_import.exit_code is not none %}
+          <span class="import-meta-item">
+            Status:
+            <strong class="{{ 'text-success' if last_import.exit_code == 0 else 'text-warning' }}">
+              {{ "Success" if last_import.exit_code == 0 else "Needs Review" }}
+            </strong>
+          </span>
+          {% endif %}
+          <span class="import-meta-item">
+            Files: <strong>{{ last_import.files_processed }}</strong>
+          </span>
+          <span class="import-meta-item">
+            Warnings: <strong>{{ last_import.warnings | length }}</strong>
+          </span>
+        </div>
+      </div>
+
+      <div class="import-stats mb-3">
+        <div class="import-stat-box">
+          <div class="import-stat-label">Tasters Imported</div>
+          <div class="import-stat-value">{{ last_import.total_tasters if last_import.total_tasters is not none else "—" }}</div>
+        </div>
+        <div class="import-stat-box">
+          <div class="import-stat-label">Leavers Imported</div>
+          <div class="import-stat-value">{{ last_import.total_leavers if last_import.total_leavers is not none else "—" }}</div>
+        </div>
+        <div class="import-stat-box">
+          <div class="import-stat-label">Files Processed</div>
+          <div class="import-stat-value">{{ last_import.files_processed }}</div>
+        </div>
+      </div>
+
+      {% if last_import.warnings %}
+      <div class="import-warning-list mb-3">
+        {% for warning in last_import.warnings %}
+        <div class="import-warning-item">{{ warning }}</div>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      <details class="import-log-details">
+        <summary>View Full Log</summary>
+        <pre class="import-log-pre">{{ last_import.log_text }}</pre>
+      </details>
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="import-note small">
+    <strong>Note:</strong> import is idempotent for existing records. Review warnings and summary before re-running.
+  </div>
+</div>
+
+{% endblock %}
