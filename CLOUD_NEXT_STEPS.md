@@ -5,6 +5,10 @@
 - Keep SQLite on mounted disk.
 - Verify `/health` and login/import flow in shared environment.
 - Set `TASTER_SHEETS_FOLDER` to the shared cloud-accessible folder path.
+- Keep login imports throttled:
+  - `TASTERIST_LOGIN_IMPORT_ENABLED=1`
+  - `TASTERIST_LOGIN_IMPORT_MINUTES=15`
+  - `TASTERIST_IMPORT_TIMEOUT_SEC=120`
 
 ## Phase 1.5 (Hardening)
 - Add daily DB backup job for `/var/data/tasterist.db`.

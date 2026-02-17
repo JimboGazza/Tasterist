@@ -20,6 +20,9 @@
    - `TASTERIST_SECRET_KEY=<long random string>`
    - `TASTERIST_DB_FILE=/var/data/tasterist.db` (or provider disk mount path)
    - `TASTER_SHEETS_FOLDER=<shared synced folder path>`
+   - `TASTERIST_LOGIN_IMPORT_ENABLED=1` (auto-import stays on)
+   - `TASTERIST_LOGIN_IMPORT_MINUTES=15` (throttle import frequency)
+   - `TASTERIST_IMPORT_TIMEOUT_SEC=120` (prevent hanging requests)
 4. Attach persistent disk storage to keep the SQLite file.
 5. Health check path:
    - `/health`

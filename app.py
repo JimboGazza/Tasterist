@@ -414,22 +414,25 @@ def login():
 
         session["user_id"] = user_rows[0]["id"]
         log_audit("login", entity_type="user", entity_id=user_rows[0]["id"], details="Successful login")
-        rc, _ = run_import_process(trigger="login")
-        log_audit(
-            "run_import",
-            entity_type="system",
-            entity_id="login",
-            details=f"Import trigger=login rc={rc}",
-            status="ok" if rc == 0 else "warn",
-        )
-        last_import = load_last_import_data() or {}
-        warning_count = len(last_import.get("warnings", []))
-        if rc != 0:
-            flash("Login import failed. Check monitor status on dashboard.", "danger")
-        elif warning_count > 0:
-            flash("Login import completed with warnings. Check monitor status.", "warning")
+        if should_run_login_import():
+            rc, _ = run_import_process(trigger="login")
+            log_audit(
+                "run_import",
+                entity_type="system",
+                entity_id="login",
+                details=f"Import trigger=login rc={rc}",
+                status="ok" if rc == 0 else "warn",
+            )
+            last_import = load_last_import_data() or {}
+            warning_count = len(last_import.get("warnings", []))
+            if rc != 0:
+                flash("Signed in. Login import failed; check monitor status.", "warning")
+            elif warning_count > 0:
+                flash("Signed in. Login import completed with warnings.", "warning")
+            else:
+                flash("Signed in.", "success")
         else:
-            flash("Login import completed successfully.", "success")
+            flash("Signed in.", "success")
 
         target = request.args.get("next")
         if not target or not target.startswith("/"):
@@ -545,16 +548,89 @@ def load_last_import_data():
     }
 
 
+def load_import_meta():
+    if not os.path.exists(IMPORT_META_FILE):
+        return None
+    try:
+        with open(IMPORT_META_FILE, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+        return meta if isinstance(meta, dict) else None
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def should_run_login_import():
+    enabled = os.environ.get("TASTERIST_LOGIN_IMPORT_ENABLED", "1").strip().lower()
+    if enabled not in {"1", "true", "yes", "on"}:
+        return False
+
+    min_minutes_raw = os.environ.get("TASTERIST_LOGIN_IMPORT_MINUTES", "15").strip()
+    try:
+        min_minutes = max(1, int(min_minutes_raw))
+    except ValueError:
+        min_minutes = 15
+
+    meta = load_import_meta()
+    if not meta:
+        return True
+    run_at_raw = str(meta.get("run_at") or "").strip()
+    if not run_at_raw:
+        return True
+    try:
+        last_run = datetime.fromisoformat(run_at_raw)
+    except ValueError:
+        return True
+    return datetime.now() - last_run >= timedelta(minutes=min_minutes)
+
+
 def run_import_process(trigger="manual"):
     import_source = get_import_source_folder()
     local_fallback = os.path.join(BASE_DIR, "Taster Sheets")
-    result = subprocess.run([
-        sys.executable,
-        "import_taster_sheets.py",
-        "--folder", import_source,
-        "--fallback-folder", local_fallback,
-        "--apply"
-    ], cwd=BASE_DIR, capture_output=True, text=True)
+    timeout_raw = os.environ.get("TASTERIST_IMPORT_TIMEOUT_SEC", "120").strip()
+    try:
+        timeout_seconds = max(15, int(timeout_raw))
+    except ValueError:
+        timeout_seconds = 120
+    try:
+        result = subprocess.run([
+            sys.executable,
+            "import_taster_sheets.py",
+            "--folder", import_source,
+            "--fallback-folder", local_fallback,
+            "--apply"
+        ], cwd=BASE_DIR, capture_output=True, text=True, timeout=timeout_seconds)
+    except subprocess.TimeoutExpired as exc:
+        log_parts = []
+        stdout_txt = (exc.stdout or "").strip()
+        stderr_txt = (exc.stderr or "").strip()
+        if stdout_txt:
+            log_parts.append(stdout_txt)
+        if stderr_txt:
+            log_parts.append(stderr_txt)
+        log_parts.append(f"Import timed out after {timeout_seconds}s.")
+        log_text = "\n\n".join(part for part in log_parts if part).strip() or "(No output captured)"
+        os.makedirs(os.path.dirname(IMPORT_LOG_FILE), exist_ok=True)
+        with open(IMPORT_LOG_FILE, "w", encoding="utf-8") as f:
+            f.write(log_text + "\n")
+        with open(IMPORT_META_FILE, "w", encoding="utf-8") as f:
+            json.dump({
+                "run_at": datetime.now().isoformat(timespec="seconds"),
+                "exit_code": 124,
+                "trigger": trigger
+            }, f)
+        return 124, log_text
+    except Exception as exc:
+        log_text = f"Import execution error: {exc}"
+        os.makedirs(os.path.dirname(IMPORT_LOG_FILE), exist_ok=True)
+        with open(IMPORT_LOG_FILE, "w", encoding="utf-8") as f:
+            f.write(log_text + "\n")
+        with open(IMPORT_META_FILE, "w", encoding="utf-8") as f:
+            json.dump({
+                "run_at": datetime.now().isoformat(timespec="seconds"),
+                "exit_code": 125,
+                "trigger": trigger
+            }, f)
+        return 125, log_text
 
     os.makedirs(os.path.dirname(IMPORT_LOG_FILE), exist_ok=True)
     log_parts = []
@@ -871,7 +947,7 @@ def sync_taster_to_excel(taster_row, mode="add", changed_field="", actor_initial
     same_day_slot = None
     any_empty_slot = None
 
-    for r in range(name_header_row + 1, taster_end_row + 1):
+    for r in range(1, taster_end_row + 1):
         for col in name_cols:
             cols = column_map[col]
             day_val = ws.cell(r, cols["day_col"]).value if cols["day_col"] >= 1 else ""
@@ -889,6 +965,9 @@ def sync_taster_to_excel(taster_row, mode="add", changed_field="", actor_initial
                 block_state[col]["time"] = parsed_time
             if parsed_date:
                 block_state[col]["date"] = parsed_date.isoformat()
+
+            if r <= name_header_row:
+                continue
 
             name_val = ws.cell(r, col).value
             name_txt = str(name_val).strip() if name_val is not None else ""
