@@ -396,9 +396,6 @@ def init_db():
     db.close()
 
 
-init_db()
-
-
 def current_user():
     user_id = session.get("user_id")
     if not user_id:
@@ -2808,6 +2805,8 @@ def dev_panel():
 # ==========================================================
 # BOOT
 # ==========================================================
+
+init_db()
 
 if __name__ == "__main__":
     app.run(debug=is_env_true("TASTERIST_DEBUG", "0"), port=8501)
