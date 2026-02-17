@@ -54,6 +54,7 @@ MONTH_NAMES = [
 ]
 OWNER_EMAIL = os.environ.get("TASTERIST_OWNER_EMAIL", "james@penninegymnastics.com").strip().lower()
 OWNER_NAME = os.environ.get("TASTERIST_OWNER_NAME", "James Gardner").strip() or "James Gardner"
+OWNER_RESET_PASSWORD = os.environ.get("TASTERIST_OWNER_RESET_PASSWORD", "").strip()
 WEAK_PASSWORDS = {
     "admin123",
     "jammy",
@@ -372,6 +373,19 @@ def _init_db_once():
             INSERT INTO users (username, password_hash, full_name, role, password_must_change)
             VALUES (?, ?, ?, 'owner', ?)
         """, (OWNER_EMAIL, generate_password_hash(owner_bootstrap_password), OWNER_NAME, owner_must_change))
+
+    # Break-glass owner reset for cloud recovery.
+    # If TASTERIST_OWNER_RESET_PASSWORD is set, owner password is rotated at startup.
+    if OWNER_RESET_PASSWORD:
+        reset_must_change = 1
+        cur.execute("""
+            UPDATE users
+            SET password_hash=?,
+                password_must_change=?,
+                role='owner'
+            WHERE lower(username)=?
+        """, (generate_password_hash(OWNER_RESET_PASSWORD), reset_must_change, OWNER_EMAIL))
+        print("⚠️ Owner password reset applied from TASTERIST_OWNER_RESET_PASSWORD.")
 
     # Remove insecure historical default admin bootstrap accounts.
     insecure_usernames = {
