@@ -8,6 +8,7 @@
 - Verify `/health` and login/import flow in shared environment.
 - Verify `/cloud/preflight` is green after first deploy.
 - Set `TASTER_SHEETS_FOLDER` to the shared cloud-accessible folder path.
+- Set `TASTERIST_CANONICAL_HOST=tasterist.com` once custom domain is active.
 - Keep login imports throttled:
   - `TASTERIST_LOGIN_IMPORT_ENABLED=1`
   - `TASTERIST_LOGIN_IMPORT_MINUTES=15`

@@ -19,6 +19,7 @@
 - `TASTERIST_LOGIN_IMPORT_ENABLED=1`
 - `TASTERIST_LOGIN_IMPORT_MINUTES=15`
 - `TASTERIST_IMPORT_TIMEOUT_SEC=120`
+- `TASTERIST_CANONICAL_HOST=tasterist.com`
 
 ## 4. First boot checks
 1. Open `/health` and confirm JSON `status: ok`.
@@ -50,8 +51,12 @@
    - `Settings` -> `Custom Domains`
    - Add `tasterist.com`
    - Add `www.tasterist.com`
-2. In your DNS provider:
-   - Create DNS records exactly shown by Render for both hostnames.
-3. Optional redirect:
-   - Redirect `www.tasterist.com` -> `tasterist.com` (or opposite, your choice).
-4. Confirm HTTPS cert is active in Render before sharing with staff.
+2. Keep that Render page open and copy the DNS values it gives you.
+3. In GoDaddy:
+   - Open `My Products` -> `Domains` -> `tasterist.com` -> `DNS`.
+   - Remove conflicting records for `@` and `www` (old A/AAAA/CNAME entries).
+   - Add records exactly as Render shows:
+     - Apex/root (`@`) record(s) for `tasterist.com`.
+     - `CNAME` for `www`.
+4. Wait for DNS propagation (can take a few minutes up to 24-48 hours).
+5. Confirm HTTPS cert is active in Render before sharing with staff.

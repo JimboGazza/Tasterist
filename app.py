@@ -402,6 +402,21 @@ def inject_current_user():
 
 
 @app.before_request
+def enforce_canonical_host():
+    canonical_host = os.environ.get("TASTERIST_CANONICAL_HOST", "").strip().lower()
+    if not canonical_host:
+        return None
+    if request.path == "/health":
+        return None
+    host = request.host.split(":", 1)[0].strip().lower()
+    if host in {canonical_host, "localhost", "127.0.0.1"}:
+        return None
+    full_path = request.full_path if request.query_string else request.path
+    # Keep one public host and force HTTPS for staff-facing links/bookmarks.
+    return redirect(f"https://{canonical_host}{full_path}", code=301)
+
+
+@app.before_request
 def require_login():
     allowed = {"login", "signup", "static", "health"}
     if request.endpoint in allowed:

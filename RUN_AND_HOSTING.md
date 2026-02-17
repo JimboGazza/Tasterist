@@ -17,12 +17,14 @@
 
 ## Can it be on `tasterist.com`?
 Yes.
-- Use a domain registrar (GoDaddy, Namecheap, Cloudflare, etc).
 - In Render service:
-  - `Settings` -> `Custom Domains` -> add `tasterist.com` and `www.tasterist.com`.
-- In DNS:
-  - add records exactly as Render asks (usually CNAME/ALIAS and optional redirect).
-- Enable HTTPS in Render (automatic cert).
+  - `Settings` -> `Custom Domains`
+  - add `tasterist.com` and `www.tasterist.com`.
+- In GoDaddy DNS:
+  - remove old/conflicting records for `@` and `www`.
+  - add the exact records Render provides for apex (`@`) and `www`.
+- Keep `TASTERIST_CANONICAL_HOST=tasterist.com` so all traffic redirects to one URL.
+- Wait for HTTPS cert to become active in Render.
 
 ## Can it be a standalone app?
 Yes, easiest path is PWA (already added).
