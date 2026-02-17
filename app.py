@@ -10,13 +10,14 @@ import calendar
 import re
 import subprocess
 import json
+import tempfile
 from functools import wraps
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from flask import (
     Flask, g, render_template, request,
-    redirect, url_for, flash, session
+    redirect, url_for, flash, session, send_file
 )
 from werkzeug.security import generate_password_hash, check_password_hash
 
@@ -2467,6 +2468,33 @@ def cloud_preflight():
         status=status,
         overall_ok=overall_ok,
         last_import=last_import,
+    )
+
+
+@app.route("/cloud/backup")
+@admin_required
+def cloud_backup():
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup_name = f"tasterist-backup-{ts}.db"
+    tmp_file = tempfile.NamedTemporaryFile(prefix="tasterist-backup-", suffix=".db", delete=False)
+    tmp_file_path = tmp_file.name
+    tmp_file.close()
+
+    src = sqlite3.connect(DB_FILE)
+    try:
+        dst = sqlite3.connect(tmp_file_path)
+        try:
+            src.backup(dst)
+        finally:
+            dst.close()
+    finally:
+        src.close()
+
+    return send_file(
+        tmp_file_path,
+        as_attachment=True,
+        download_name=backup_name,
+        mimetype="application/octet-stream"
     )
 
 @app.route("/import")

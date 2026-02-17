@@ -50,7 +50,9 @@
                   data-time="{{ s.time_range }}">
             <div class="session-tile-title">{{ s.class_name }}</div>
             <div class="session-tile-time">{{ s.time_range }}</div>
-            <div class="session-tile-chip">Upcoming: {{ s.upcoming_count }}</div>
+            <div class="session-tile-chip {% if s.upcoming_count == 0 %}session-tile-chip-empty{% endif %}">
+              {% if s.upcoming_count > 0 %}Upcoming: {{ s.upcoming_count }}{% else %}&nbsp;{% endif %}
+            </div>
           </button>
           {% endfor %}
         {% else %}

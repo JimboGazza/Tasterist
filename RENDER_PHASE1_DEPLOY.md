@@ -40,3 +40,7 @@
    - Record leaver
    - Use Admin Tasks toggles
    - Confirm monitor status.
+
+## 7. Backups
+- Manual backup download (admin): `/cloud/backup`
+- Store downloaded `.db` files in secure cloud storage.

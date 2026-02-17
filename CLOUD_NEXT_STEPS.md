@@ -13,6 +13,7 @@
   - `TASTERIST_IMPORT_TIMEOUT_SEC=120`
 
 ## Phase 1.5 (Hardening)
+- Use `/cloud/backup` for manual admin-triggered DB backups.
 - Add daily DB backup job for `/var/data/tasterist.db`.
 - Add import retry logic for locked/unavailable workbook files.
 - Add alerting if import status is `warn/error` for 2+ runs.
