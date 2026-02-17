@@ -991,6 +991,16 @@ def find_programme_workbook(programme, year, prefer_local=True, local_only=False
     return None
 
 
+def excel_sync_local_only_mode():
+    # Default behaviour:
+    # - local/dev: write only to fallback "Taster Sheets" copies
+    # - cloud/render: write to configured TASTER_SHEETS_FOLDER
+    raw = os.environ.get("TASTERIST_EXCEL_SYNC_LOCAL_ONLY")
+    if raw is not None:
+        return raw.strip().lower() in {"1", "true", "yes", "on"}
+    return not _running_in_prod()
+
+
 def _extract_time(value):
     if value is None:
         return ""
@@ -1210,11 +1220,14 @@ def sync_taster_to_excel(taster_row, mode="add", changed_field="", actor_initial
     except Exception:
         return False, "Invalid taster date"
 
+    local_only_sync = excel_sync_local_only_mode()
     workbook = find_programme_workbook(
-        row.get("programme"), row_date.year, prefer_local=True, local_only=True
+        row.get("programme"), row_date.year, prefer_local=True, local_only=local_only_sync
     )
     if workbook is None:
-        return False, "Local workbook not found in Taster Sheets for programme/year"
+        if local_only_sync:
+            return False, "Local workbook not found in Taster Sheets for programme/year"
+        return False, "Workbook not found in configured sheets folder for programme/year"
 
     try:
         wb = load_workbook(workbook)
@@ -1359,11 +1372,14 @@ def sync_leaver_to_excel(leaver_row, actor_initials=""):
     except Exception:
         return False, "Invalid leave date"
 
+    local_only_sync = excel_sync_local_only_mode()
     workbook = find_programme_workbook(
-        row.get("programme"), leave_dt.year, prefer_local=True, local_only=True
+        row.get("programme"), leave_dt.year, prefer_local=True, local_only=local_only_sync
     )
     if workbook is None:
-        return False, "Local workbook not found in Taster Sheets for programme/year"
+        if local_only_sync:
+            return False, "Local workbook not found in Taster Sheets for programme/year"
+        return False, "Workbook not found in configured sheets folder for programme/year"
     try:
         wb = load_workbook(workbook)
     except Exception as exc:

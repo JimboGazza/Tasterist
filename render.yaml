@@ -14,7 +14,7 @@ services:
       - key: TASTER_SHEETS_FOLDER
         value: /var/data/taster-sheets
       - key: TASTERIST_LOGIN_IMPORT_ENABLED
-        value: "1"
+        value: "0"
       - key: TASTERIST_LOGIN_IMPORT_MINUTES
         value: "15"
       - key: TASTERIST_IMPORT_TIMEOUT_SEC
@@ -23,6 +23,8 @@ services:
         value: tasterist.com
       - key: TASTERIST_OWNER_EMAIL
         value: james@penninegymnastics.com
+      - key: TASTERIST_EXCEL_SYNC_LOCAL_ONLY
+        value: "0"
       - key: TASTERIST_DEV_TOOLS_ENABLED
         value: "0"
     disk:

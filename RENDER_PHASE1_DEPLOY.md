@@ -16,13 +16,17 @@
 - `TASTERIST_SECRET_KEY` (auto generated)
 - `TASTERIST_DB_FILE=/var/data/tasterist.db`
 - `TASTER_SHEETS_FOLDER=/var/data/taster-sheets`
-- `TASTERIST_LOGIN_IMPORT_ENABLED=1`
+- `TASTERIST_LOGIN_IMPORT_ENABLED=0`
 - `TASTERIST_LOGIN_IMPORT_MINUTES=15`
 - `TASTERIST_IMPORT_TIMEOUT_SEC=120`
 - `TASTERIST_CANONICAL_HOST=tasterist.com`
 - `TASTERIST_OWNER_EMAIL=james@penninegymnastics.com`
 - `TASTERIST_OWNER_BOOTSTRAP_PASSWORD=<set a strong one>`
 - `TASTERIST_DEV_TOOLS_ENABLED=0`
+- `TASTERIST_EXCEL_SYNC_LOCAL_ONLY=0` (cloud writes to `/var/data/taster-sheets`)
+
+Recommended for cloud stability:
+- `TASTERIST_LOGIN_IMPORT_ENABLED=0` (admins run import manually when spreadsheets are updated)
 
 ## 4. First boot checks
 1. Open `/health` and confirm JSON `status: ok`.
