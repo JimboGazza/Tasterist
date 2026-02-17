@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="container-fluid account-admin-page">
+  <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+    <div>
+      <h2 class="text-white mb-1">Cloud Preflight</h2>
+      <p class="text-white mb-0">Deployment checks before staff onboarding.</p>
+    </div>
+    <a href="{{ url_for('dashboard') }}" class="btn btn-glass">Back to Dashboard</a>
+  </div>
+
+  <div class="dashboard-card mb-3">
+    <div class="d-flex justify-content-between align-items-center">
+      <h5 class="mb-0">Overall</h5>
+      <span class="monitor-pill {% if overall_ok %}monitor-ok{% else %}monitor-warn{% endif %}">
+        {% if overall_ok %}Ready{% else %}Needs Attention{% endif %}
+      </span>
+    </div>
+  </div>
+
+  <div class="task-columns">
+    {% for c in checks %}
+    <section class="task-column">
+      <header class="task-column-head d-flex justify-content-between align-items-center">
+        <span>{{ c.name }}</span>
+        <span class="dashboard-chip">{{ status(c.ok) }}</span>
+      </header>
+      <div class="task-column-body">
+        <div class="dashboard-subtle">{{ c.path }}</div>
+        <div class="dashboard-subtle">{{ c.detail }}</div>
+      </div>
+    </section>
+    {% endfor %}
+  </div>
+
+  {% if last_import %}
+  <div class="dashboard-card mt-3">
+    <h6 class="mb-2">Last Import Snapshot</h6>
+    <div class="dashboard-pills">
+      <span class="dashboard-pill">Run: {{ last_import.run_at }}</span>
+      <span class="dashboard-pill">Warnings: {{ last_import.warnings|length }}</span>
+      <span class="dashboard-pill">Tasters: {{ last_import.total_tasters if last_import.total_tasters is not none else "—" }}</span>
+      <span class="dashboard-pill">Leavers: {{ last_import.total_leavers if last_import.total_leavers is not none else "—" }}</span>
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+{% endblock %}

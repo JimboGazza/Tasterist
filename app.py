@@ -116,6 +116,7 @@ def init_db():
             taster_date DATE,
             notes TEXT,
             attended INTEGER DEFAULT 0,
+            club_fees INTEGER DEFAULT 0,
             bg INTEGER DEFAULT 0,
             badge INTEGER DEFAULT 0,
             reschedule_contacted INTEGER DEFAULT 0
@@ -246,6 +247,8 @@ def init_db():
     }
     if "class_name" not in taster_cols:
         cur.execute("ALTER TABLE tasters ADD COLUMN class_name TEXT DEFAULT ''")
+    if "club_fees" not in taster_cols:
+        cur.execute("ALTER TABLE tasters ADD COLUMN club_fees INTEGER DEFAULT 0")
     if "reschedule_contacted" not in taster_cols:
         cur.execute("ALTER TABLE tasters ADD COLUMN reschedule_contacted INTEGER DEFAULT 0")
     # Keep session format consistent: time-only (e.g. 16:00), no weekday prefix.
@@ -906,6 +909,10 @@ def _build_column_map(ws, name_header_row, name_cols):
                 col, 2,
                 lambda t: ("attended" in t) or ("attend" in t)
             ),
+            "club_fees_col": find_col(
+                col, 3,
+                lambda t: ("paid club fees" in t) or ("club fees" in t) or ("dd" in t and "paid" in t)
+            ),
             "bg_col": find_col(
                 col, 4,
                 lambda t: ("paid bg" in t) or (t == "bg") or ("paid" in t and "bg" in t)
@@ -1088,6 +1095,8 @@ def sync_taster_to_excel(taster_row, mode="add", changed_field="", actor_initial
             ws.cell(row_idx, cols["added_by_col"]).value = actor_initials
         if cols["attended_col"] <= ws.max_column:
             ws.cell(row_idx, cols["attended_col"]).value = _sync_yes_cell(row.get("attended", 0))
+        if cols["club_fees_col"] <= ws.max_column:
+            ws.cell(row_idx, cols["club_fees_col"]).value = _sync_yes_cell(row.get("club_fees", 0))
         if cols["bg_col"] <= ws.max_column:
             ws.cell(row_idx, cols["bg_col"]).value = _sync_yes_cell(row.get("bg", 0))
         if cols["badge_col"] <= ws.max_column:
@@ -1095,6 +1104,7 @@ def sync_taster_to_excel(taster_row, mode="add", changed_field="", actor_initial
     elif mode == "status":
         field_col_lookup = {
             "attended": cols["attended_col"],
+            "club_fees": cols["club_fees_col"],
             "bg": cols["bg_col"],
             "badge": cols["badge_col"],
         }
@@ -1102,6 +1112,13 @@ def sync_taster_to_excel(taster_row, mode="add", changed_field="", actor_initial
         if not target_col or target_col > ws.max_column:
             return False, f"Status column not found for {changed_field}"
         ws.cell(row_idx, target_col).value = _sync_yes_cell(row.get(changed_field, 0))
+    elif mode == "contacted":
+        if cols["notes_col"] <= ws.max_column and int(row.get("reschedule_contacted", 0) or 0) == 1:
+            old_note = str(ws.cell(row_idx, cols["notes_col"]).value or "").strip()
+            if "contacted" not in old_note.lower():
+                ws.cell(row_idx, cols["notes_col"]).value = (
+                    f"{old_note} | Contacted for reschedule" if old_note else "Contacted for reschedule"
+                )
     else:
         return False, "Unknown sync mode"
 
@@ -1316,7 +1333,7 @@ def build_week_schedule(programme, week_start):
 
 
 def toggle_flag(taster_id, column):
-    if column not in ("attended", "bg", "badge"):
+    if column not in ("attended", "club_fees", "bg", "badge"):
         return None
     db = get_db()
     cur = db.cursor()
@@ -1454,7 +1471,7 @@ def today():
 
 @app.post("/toggle/<int:taster_id>/<field>", endpoint="toggle")
 def toggle_view(taster_id, field):
-    if field not in ("attended", "bg", "badge"):
+    if field not in ("attended", "club_fees", "bg", "badge"):
         flash("Invalid toggle field", "danger")
         return redirect(request.referrer or url_for("today"))
 
@@ -1749,10 +1766,11 @@ def add_leaver():
 
 @app.route("/admin/tasks")
 def admin_tasks():
-    today_iso = date.today().isoformat()
-    cutoff_iso = (date.today() - timedelta(days=62)).isoformat()
-    month_key = date.today().strftime("%Y-%m")
-    month_label = date.today().strftime("%B %Y")
+    today_dt = date.today()
+    today_iso = today_dt.isoformat()
+    cutoff_iso = (today_dt - timedelta(days=62)).isoformat()
+    month_key = today_dt.strftime("%Y-%m")
+    month_label = today_dt.strftime("%B %Y")
     user = current_user()
     assignments = user.get("admin_days", []) if user else []
     assignments_sorted = sorted(
@@ -1761,140 +1779,155 @@ def admin_tasks():
     )
     assignment_set = {(a["day_name"], a["programme"]) for a in assignments_sorted}
 
+    def key_for(day_name, programme):
+        return f"{day_name}|{programme}"
+
     db = get_db()
-    pending_compliance_rows = db.execute("""
-        SELECT id, child, programme, session, taster_date, attended, bg, badge, notes
-        FROM tasters
-        WHERE attended=1 AND (bg=0 OR badge=0) AND taster_date>=?
-        ORDER BY taster_date DESC, programme, session, child
-    """, (cutoff_iso,)).fetchall()
-
-    reschedule_rows = db.execute("""
-        SELECT id, child, programme, session, taster_date, notes
-        FROM tasters
-        WHERE attended=0 AND reschedule_contacted=0 AND taster_date<=? AND taster_date>=?
-        ORDER BY taster_date DESC, programme, session, child
-    """, (today_iso, cutoff_iso)).fetchall()
-
-    if not assignments_sorted:
-        assignments_sorted = [
-            {"day_name": "All", "programme": "all"}
-        ]
-
-    pending_by_assignment = {f"{a['day_name']}|{a['programme']}": [] for a in assignments_sorted}
-    no_show_by_assignment = {f"{a['day_name']}|{a['programme']}": [] for a in assignments_sorted}
-    leaver_count_by_assignment = {f"{a['day_name']}|{a['programme']}": 0 for a in assignments_sorted}
-    leaver_rows_by_assignment = {f"{a['day_name']}|{a['programme']}": [] for a in assignments_sorted}
-
-    for r in pending_compliance_rows:
-        day_name = datetime.fromisoformat(r["taster_date"]).strftime("%A")
-        key = f"{day_name}|{r['programme']}"
-        if assignment_set:
-            if key in pending_by_assignment:
-                pending_by_assignment[key].append(r)
-        else:
-            pending_by_assignment["All|all"].append(r)
-
-    for r in reschedule_rows:
-        day_name = datetime.fromisoformat(r["taster_date"]).strftime("%A")
-        key = f"{day_name}|{r['programme']}"
-        if assignment_set:
-            if key in no_show_by_assignment:
-                no_show_by_assignment[key].append(r)
-        else:
-            no_show_by_assignment["All|all"].append(r)
-
+    leaver_count_map = {}
+    unknown_leaver_counts = {}
     leaver_rows = db.execute("""
         SELECT child, programme, leave_date, class_day, session, class_name
         FROM leavers
         WHERE leave_month=?
-        ORDER BY leave_date DESC, programme, child
     """, (month_key,)).fetchall()
-
-    unassigned_leavers = []
-    unknown_counts = {}
     for row in leaver_rows:
         row_dict = dict(row)
-        day_name = ""
-        class_day = extract_day_name(row_dict.get("class_day"))
-        if class_day:
-            day_name = class_day
-        leave_date = (row_dict["leave_date"] or "").strip()
+        day_name = (
+            extract_day_name(row_dict.get("class_day"))
+            or extract_day_name(row_dict.get("session"))
+        )
+        leave_date = str(row_dict.get("leave_date") or "").strip()
         if not day_name and leave_date:
             try:
                 day_name = datetime.fromisoformat(leave_date).strftime("%A")
             except ValueError:
                 day_name = ""
-        if not day_name and row_dict.get("session"):
-            session_text = str(row_dict.get("session") or "")
-            for d_name in WEEKDAY_NAMES:
-                if d_name.lower() in session_text.lower():
-                    day_name = d_name
-                    break
         if not day_name:
-            inferred = db.execute("""
-                SELECT taster_date, session, class_name
-                FROM tasters
-                WHERE lower(child)=lower(?) AND programme=?
-                ORDER BY taster_date DESC
-                LIMIT 1
-            """, (row_dict["child"], row_dict["programme"])).fetchone()
-            if inferred and inferred["taster_date"]:
-                try:
-                    day_name = datetime.fromisoformat(inferred["taster_date"]).strftime("%A")
-                except ValueError:
-                    day_name = ""
-                if not row_dict.get("session"):
-                    row_dict["session"] = inferred["session"] or ""
-                if not row_dict.get("class_name"):
-                    row_dict["class_name"] = inferred["class_name"] or ""
-                if not row_dict.get("leave_date"):
-                    row_dict["leave_date"] = "?"
-                    row_dict["inferred"] = True
+            unknown_key = key_for("?", row_dict["programme"])
+            unknown_leaver_counts[unknown_key] = unknown_leaver_counts.get(unknown_key, 0) + 1
+            continue
+        if assignment_set and (day_name, row_dict["programme"]) not in assignment_set:
+            continue
+        key = key_for(day_name, row_dict["programme"])
+        leaver_count_map[key] = leaver_count_map.get(key, 0) + 1
 
-        key = f"{day_name}|{row_dict['programme']}" if day_name else ""
-        if assignment_set:
-            if key in leaver_count_by_assignment:
-                leaver_count_by_assignment[key] += 1
-                leaver_rows_by_assignment[key].append(row_dict)
-            else:
-                unassigned_leavers.append(row_dict)
-                count_key = f"?|{row_dict['programme']}"
-                unknown_counts[count_key] = unknown_counts.get(count_key, 0) + 1
-        else:
-            leaver_count_by_assignment["All|all"] += 1
-            leaver_rows_by_assignment["All|all"].append(row_dict)
+    member_count_map = {}
+    member_rows = db.execute("""
+        SELECT taster_date, programme
+        FROM tasters
+        WHERE strftime('%Y-%m', taster_date)=?
+          AND attended=1
+          AND club_fees=1
+          AND bg=1
+          AND badge=1
+    """, (month_key,)).fetchall()
+    for row in member_rows:
+        day_name = datetime.fromisoformat(row["taster_date"]).strftime("%A")
+        if assignment_set and (day_name, row["programme"]) not in assignment_set:
+            continue
+        key = key_for(day_name, row["programme"])
+        member_count_map[key] = member_count_map.get(key, 0) + 1
+
+    followup_rows = []
+    raw_followups = db.execute("""
+        SELECT
+            id, child, programme, taster_date, session, class_name,
+            attended, club_fees, bg, badge, reschedule_contacted, notes
+        FROM tasters
+        WHERE taster_date>=?
+          AND taster_date<=?
+          AND (attended=0 OR club_fees=0 OR bg=0 OR badge=0)
+        ORDER BY taster_date DESC, programme, session, child
+    """, (cutoff_iso, today_iso)).fetchall()
+    for row in raw_followups:
+        row_dict = dict(row)
+        day_name = datetime.fromisoformat(row["taster_date"]).strftime("%A")
+        if assignment_set and (day_name, row["programme"]) not in assignment_set:
+            continue
+        row_dict["day_name"] = day_name
+        followup_rows.append(row_dict)
+
+    if assignments_sorted:
+        summary_rows = []
+        for a in assignments_sorted:
+            key = key_for(a["day_name"], a["programme"])
+            summary_rows.append({
+                "day_name": a["day_name"],
+                "programme": a["programme"],
+                "key": key,
+                "leavers": leaver_count_map.get(key, 0),
+                "members": member_count_map.get(key, 0),
+            })
+    else:
+        keys = set(leaver_count_map.keys()) | set(member_count_map.keys())
+        for row in followup_rows:
+            keys.add(key_for(row["day_name"], row["programme"]))
+        summary_rows = []
+        for key in sorted(
+            keys,
+            key=lambda k: (
+                DAY_ORDER.get(k.split("|", 1)[0], 99),
+                k.split("|", 1)[1]
+            )
+        ):
+            day_name, programme = key.split("|", 1)
+            summary_rows.append({
+                "day_name": day_name,
+                "programme": programme,
+                "key": key,
+                "leavers": leaver_count_map.get(key, 0),
+                "members": member_count_map.get(key, 0),
+            })
+
+    unknown_summary = []
+    for key, count in sorted(unknown_leaver_counts.items()):
+        _, programme = key.split("|", 1)
+        unknown_summary.append({
+            "programme": programme,
+            "count": count,
+        })
 
     return render_template(
         "admin_tasks.html",
-        pending_by_assignment=pending_by_assignment,
-        no_show_by_assignment=no_show_by_assignment,
-        leaver_count_by_assignment=leaver_count_by_assignment,
-        leaver_rows_by_assignment=leaver_rows_by_assignment,
-        unassigned_leavers=unassigned_leavers,
-        unknown_counts=unknown_counts,
         month_label=month_label,
+        summary_rows=summary_rows,
+        unknown_summary=unknown_summary,
+        followup_rows=followup_rows,
+        followup_total=len(followup_rows),
         assignments=assignments_sorted,
         has_custom_assignments=bool(assignment_set),
         today=today_iso,
-        cutoff=cutoff_iso
+        cutoff=cutoff_iso,
     )
 
 
 @app.post("/admin/tasks/contact/<int:taster_id>")
 def admin_mark_contacted(taster_id):
     db = get_db()
-    db.execute(
-        "UPDATE tasters SET reschedule_contacted=1 WHERE id=?",
-        (taster_id,)
-    )
+    row = db.execute("SELECT * FROM tasters WHERE id=?", (taster_id,)).fetchone()
+    if not row:
+        flash("Taster not found.", "warning")
+        return redirect(request.referrer or url_for("admin_tasks"))
+    db.execute("UPDATE tasters SET reschedule_contacted=1 WHERE id=?", (taster_id,))
     db.commit()
+    updated_row = db.execute("SELECT * FROM tasters WHERE id=?", (taster_id,)).fetchone()
+    sync_ok = True
+    sync_msg = "Excel sync skipped"
+    if updated_row:
+        initials = user_initials((current_user() or {}).get("full_name", ""))
+        sync_ok, sync_msg = sync_taster_to_excel(
+            updated_row,
+            mode="contacted",
+            actor_initials=initials
+        )
+        if not sync_ok:
+            flash(f"Marked contacted in app, but Excel sync needs review: {sync_msg}", "warning")
     log_audit(
         "mark_no_show_contacted",
         entity_type="taster",
         entity_id=taster_id,
-        details="Marked as contacted for reschedule",
-        status="ok",
+        details=f"Marked as contacted for reschedule | excel_sync={sync_msg}",
+        status="ok" if sync_ok else "warn",
     )
     flash("Marked as contacted.", "success")
     return redirect(request.referrer or url_for("admin_tasks"))
@@ -2338,6 +2371,56 @@ def health():
         "status": "ok",
         "time": datetime.now().isoformat(timespec="seconds"),
     }
+
+
+@app.route("/cloud/preflight")
+@admin_required
+def cloud_preflight():
+    db_path = Path(DB_FILE)
+    db_parent = db_path.parent
+    sheets_path = Path(get_import_source_folder()).expanduser()
+
+    def status(ok, ok_label="OK", bad_label="Needs Attention"):
+        return ok_label if ok else bad_label
+
+    checks = [
+        {
+            "name": "Database Directory",
+            "path": str(db_parent),
+            "ok": db_parent.exists() and os.access(db_parent, os.W_OK),
+            "detail": "Must exist and be writable by the app process.",
+        },
+        {
+            "name": "Database File",
+            "path": str(db_path),
+            "ok": (db_path.exists() and os.access(db_path, os.W_OK)) or (not db_path.exists() and os.access(db_parent, os.W_OK)),
+            "detail": "Either writable existing file or writable parent for first create.",
+        },
+        {
+            "name": "Taster Sheets Folder",
+            "path": str(sheets_path),
+            "ok": sheets_path.exists() and os.access(sheets_path, os.R_OK),
+            "detail": "Folder must be readable in cloud for imports.",
+        },
+    ]
+    last_import = load_last_import_data() or {}
+    import_ok = (last_import.get("exit_code", 0) == 0) if last_import else False
+    import_warn = len(last_import.get("warnings", [])) if last_import else 0
+    checks.append({
+        "name": "Latest Import",
+        "path": str(last_import.get("run_at") or "Not run"),
+        "ok": import_ok and import_warn == 0,
+        "detail": "Should be green before onboarding staff.",
+    })
+
+    overall_ok = all(c["ok"] for c in checks)
+    return render_template(
+        "cloud_preflight.html",
+        checks=checks,
+        status=status,
+        overall_ok=overall_ok,
+        last_import=last_import,
+    )
 
 @app.route("/import")
 def import_page():

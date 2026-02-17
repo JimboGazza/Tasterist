@@ -76,6 +76,12 @@
             </button>
           </form>
 
+          <form method="post" action="{{ url_for('toggle', taster_id=r.id, field='club_fees') }}">
+            <button class="toggle-btn club-fees {% if r.club_fees %}active{% endif %}">
+              Club Fees
+            </button>
+          </form>
+
           <form method="post" action="{{ url_for('toggle', taster_id=r.id, field='bg') }}">
             <button class="toggle-btn bg {% if r.bg %}active{% endif %}">
               BG

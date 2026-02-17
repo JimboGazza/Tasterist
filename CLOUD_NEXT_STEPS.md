@@ -4,6 +4,7 @@
 - Deploy with `render.yaml`.
 - Keep SQLite on mounted disk.
 - Verify `/health` and login/import flow in shared environment.
+- Verify `/cloud/preflight` is green after first deploy.
 - Set `TASTER_SHEETS_FOLDER` to the shared cloud-accessible folder path.
 - Keep login imports throttled:
   - `TASTERIST_LOGIN_IMPORT_ENABLED=1`

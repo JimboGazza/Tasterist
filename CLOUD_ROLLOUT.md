@@ -26,7 +26,9 @@
 4. Attach persistent disk storage to keep the SQLite file.
 5. Health check path:
    - `/health`
-6. Validate with:
+6. Run cloud preflight page after first deploy:
+   - `/cloud/preflight`
+7. Validate with:
    - login,
    - import run,
    - add/toggle taster,

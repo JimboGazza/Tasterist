@@ -111,7 +111,12 @@
   <section class="dashboard-card monitor-card mt-4">
     <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
       <h5 class="mb-0">Monitor</h5>
-      <span class="monitor-pill {{ monitor.class_name }}">{{ monitor.label }}</span>
+      <div class="d-flex gap-2 align-items-center">
+        {% if is_admin_user %}
+        <a href="{{ url_for('cloud_preflight') }}" class="btn btn-glass btn-sm">Cloud Preflight</a>
+        {% endif %}
+        <span class="monitor-pill {{ monitor.class_name }}">{{ monitor.label }}</span>
+      </div>
     </div>
     <div class="dashboard-pills">
       <span class="dashboard-pill">Last Import: {{ monitor.run_at }}</span>

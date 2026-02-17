@@ -287,10 +287,30 @@ body > .container-fluid {
   color: white;
 }
 
+.toggle-btn.active.club-fees {
+  background: #1f5c7a;
+  border-color: #67d3ff;
+  color: white;
+}
+
 .toggle-btn.active.badge {
   background: #065f46;
   border-color: #4ade80;
   color: white;
+}
+
+.toggle-btn.active.contact {
+  background: #14532d;
+  border-color: #4ade80;
+  color: white;
+}
+
+.toggle-btn.disabled,
+.toggle-btn:disabled {
+  background: #1f2937;
+  border-color: #374151;
+  color: #9ca3af;
+  cursor: not-allowed;
 }
 
 /* ---------- FORMS ---------- */
@@ -519,7 +539,7 @@ textarea.form-control {
 
 .day-actions {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 8px;
 }
 
@@ -559,10 +579,30 @@ textarea.form-control {
   color: white;
 }
 
+.toggle-btn.active.club-fees {
+  background: #1f5c7a;
+  border-color: #67d3ff;
+  color: white;
+}
+
 .toggle-btn.active.badge {
   background: #065f46;
   border-color: #4ade80;
   color: white;
+}
+
+.toggle-btn.active.contact {
+  background: #14532d;
+  border-color: #4ade80;
+  color: white;
+}
+
+.toggle-btn.disabled,
+.toggle-btn:disabled {
+  background: #1f2937;
+  border-color: #374151;
+  color: #9ca3af;
+  cursor: not-allowed;
 }
 
 /* ---------- ALERTS ---------- */
@@ -1134,6 +1174,37 @@ code {
   min-width: 92px;
 }
 
+.followup-list {
+  display: grid;
+  gap: 9px;
+}
+
+.followup-row {
+  align-items: center;
+  background: #0f2419;
+  border: 1px solid #214a31;
+  border-radius: 10px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 1.2fr 1.8fr;
+  padding: 0.55rem 0.6rem;
+}
+
+.followup-main {
+  min-width: 0;
+}
+
+.followup-actions {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.followup-actions .toggle-btn {
+  height: 34px;
+  min-width: 0;
+}
+
 .task-empty {
   border: 1px dashed #2c5f40;
   border-radius: 10px;
@@ -1161,6 +1232,12 @@ code {
   }
   .account-admin-fields {
     grid-template-columns: 1fr;
+  }
+  .followup-row {
+    grid-template-columns: 1fr;
+  }
+  .followup-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .task-columns {
     grid-template-columns: 1fr;

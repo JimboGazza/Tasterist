@@ -283,6 +283,10 @@ def import_excel(path, conn):
                 col, 2,
                 lambda t: "attend" in t
             )
+            club_fees_col = find_col(
+                col, 3,
+                lambda t: ("paid club fees" in t) or ("club fees" in t) or ("dd" in t and "paid" in t)
+            )
             bg_col = find_col(
                 col, 4,
                 lambda t: ("paid bg" in t) or (t == "bg") or ("paid" in t and "bg" in t)
@@ -299,6 +303,7 @@ def import_excel(path, conn):
                 "day_col": day_col,
                 "date_col": date_col,
                 "attended_col": attended_col,
+                "club_fees_col": club_fees_col,
                 "bg_col": bg_col,
                 "badge_col": badge_col,
                 "notes_col": notes_col,
@@ -316,6 +321,7 @@ def import_excel(path, conn):
                 day_col = cols["day_col"]
                 date_col = cols["date_col"]
                 attended_col = cols["attended_col"]
+                club_fees_col = cols["club_fees_col"]
                 bg_col = cols["bg_col"]
                 badge_col = cols["badge_col"]
                 notes_col = cols["notes_col"]
@@ -361,9 +367,9 @@ def import_excel(path, conn):
                 cur.execute("""
                     INSERT OR IGNORE INTO tasters (
                         child, programme, location, session, class_name, taster_date,
-                        attended, bg, badge, notes
+                        attended, club_fees, bg, badge, notes
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     name,
                     programme,
@@ -372,6 +378,7 @@ def import_excel(path, conn):
                     class_name,
                     effective_date,
                     truthy(ws.cell(r, attended_col).value) if attended_col <= ws.max_column else 0,
+                    truthy(ws.cell(r, club_fees_col).value) if club_fees_col <= ws.max_column else 0,
                     truthy(ws.cell(r, bg_col).value) if bg_col <= ws.max_column else 0,
                     truthy(ws.cell(r, badge_col).value) if badge_col <= ws.max_column else 0,
                     normalise_cell_text(note_val),
@@ -490,8 +497,14 @@ def main():
 
     conn = sqlite3.connect(args.db)
     taster_cols = {r[1] for r in conn.execute("PRAGMA table_info(tasters)")}
+    migrated = False
     if "class_name" not in taster_cols:
         conn.execute("ALTER TABLE tasters ADD COLUMN class_name TEXT DEFAULT ''")
+        migrated = True
+    if "club_fees" not in taster_cols:
+        conn.execute("ALTER TABLE tasters ADD COLUMN club_fees INTEGER DEFAULT 0")
+        migrated = True
+    if migrated:
         conn.commit()
 
     if args.apply:
