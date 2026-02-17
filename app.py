@@ -486,14 +486,12 @@ def owner_required(view_func):
 def password_strength_errors(password):
     value = password or ""
     errors = []
-    if len(value) < 10:
-        errors.append("must be at least 10 characters")
+    if len(value) < 7:
+        errors.append("must be at least 7 characters")
     if not re.search(r"[A-Z]", value):
         errors.append("must include an uppercase letter")
     if not re.search(r"[a-z]", value):
         errors.append("must include a lowercase letter")
-    if not re.search(r"\d", value):
-        errors.append("must include a number")
     return errors
 
 
@@ -684,7 +682,6 @@ def login():
         session["must_change_password"] = bool(
             user_rows[0]["password_must_change"]
             or password_strength_errors(password)
-            or is_password_weak_literal(password)
         )
         log_audit("login", entity_type="user", entity_id=user_rows[0]["id"], details="Successful login")
         if should_run_login_import():
@@ -2255,8 +2252,6 @@ def account_settings():
                 flash("Current password is incorrect.", "danger")
                 return redirect(url_for("account_settings"))
             password_errors = password_strength_errors(new_password)
-            if is_password_weak_literal(new_password):
-                password_errors.append("must not use weak/default passwords")
             if password_errors:
                 flash("New password " + "; ".join(password_errors) + ".", "warning")
                 return redirect(url_for("account_settings"))
@@ -2368,8 +2363,6 @@ def account_admin():
             if role not in {"admin", "staff"}:
                 role = "staff"
             password_errors = password_strength_errors(password)
-            if is_password_weak_literal(password):
-                password_errors.append("must not use weak/default passwords")
             if password_errors:
                 flash("Password " + "; ".join(password_errors) + ".", "warning")
                 return redirect(url_for("account_admin"))
@@ -2495,8 +2488,6 @@ def account_admin():
 
             if new_password:
                 password_errors = password_strength_errors(new_password)
-                if is_password_weak_literal(new_password):
-                    password_errors.append("must not use weak/default passwords")
                 if password_errors:
                     flash("New password " + "; ".join(password_errors) + ".", "warning")
                     return redirect(url_for("account_admin"))
