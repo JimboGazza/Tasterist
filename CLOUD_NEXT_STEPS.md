@@ -2,6 +2,7 @@
 
 ## Phase 1 (Now)
 - Deploy with `render.yaml`.
+- Follow: `RENDER_PHASE1_DEPLOY.md`
 - Keep SQLite on mounted disk.
 - Verify `/health` and login/import flow in shared environment.
 - Verify `/cloud/preflight` is green after first deploy.

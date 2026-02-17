@@ -1359,6 +1359,9 @@ def dashboard():
     db = get_db()
     today = date.today()
     month_key = today.strftime("%Y-%m")
+    week_start = today - timedelta(days=today.weekday())
+    week_end = week_start + timedelta(days=6)
+    cutoff_iso = (today - timedelta(days=62)).isoformat()
     days_in_month = calendar.monthrange(today.year, today.month)[1]
     days_left = max(days_in_month - today.day, 0)
 
@@ -1375,19 +1378,31 @@ def dashboard():
         "SELECT COUNT(*) c FROM tasters"
     ).fetchone()["c"]
 
-    todays = db.execute("""
+    todays_counts_rows = db.execute("""
         SELECT programme, COUNT(*) c
         FROM tasters
         WHERE taster_date=?
         GROUP BY programme
     """, (today.isoformat(),)).fetchall()
+    todays_counts = {"lockwood": 0, "honley": 0, "preschool": 0}
+    for row in todays_counts_rows:
+        todays_counts[row["programme"]] = int(row["c"] or 0)
+    todays_total = sum(todays_counts.values())
 
-    todays_tasters = db.execute("""
+    todays_tasters_rows = db.execute("""
         SELECT child, programme, session, class_name
         FROM tasters
         WHERE taster_date=?
         ORDER BY session, child
     """, (today.isoformat(),)).fetchall()
+    todays_by_programme = {
+        "lockwood": [],
+        "honley": [],
+        "preschool": [],
+    }
+    for row in todays_tasters_rows:
+        programme = row["programme"] if row["programme"] in todays_by_programme else "lockwood"
+        todays_by_programme[programme].append(dict(row))
 
     month_by_programme_rows = db.execute("""
         SELECT programme, COUNT(*) c
@@ -1413,6 +1428,31 @@ def dashboard():
             "count": count,
             "pct": pct,
         })
+
+    followups_open = db.execute("""
+        SELECT COUNT(*) c
+        FROM tasters
+        WHERE taster_date>=?
+          AND taster_date<=?
+          AND (attended=0 OR club_fees=0 OR bg=0 OR badge=0)
+    """, (cutoff_iso, today.isoformat())).fetchone()["c"]
+
+    converted_month = db.execute("""
+        SELECT COUNT(*) c
+        FROM tasters
+        WHERE strftime('%Y-%m', taster_date)=?
+          AND attended=1
+          AND club_fees=1
+          AND bg=1
+          AND badge=1
+    """, (month_key,)).fetchone()["c"]
+
+    week_bookings = db.execute("""
+        SELECT COUNT(*) c
+        FROM tasters
+        WHERE taster_date>=?
+          AND taster_date<=?
+    """, (week_start.isoformat(), week_end.isoformat())).fetchone()["c"]
 
     last_import = load_last_import_data()
     monitor = {
@@ -1444,15 +1484,22 @@ def dashboard():
     return render_template(
         "dashboard.html",
         month=today.strftime("%B %Y"),
+        current_time=datetime.now().strftime("%H:%M"),
+        today=today,
         tasters=tasters_month,
         leavers=leavers_month,
         net=tasters_month - leavers_month,
-        todays=todays,
-        todays_tasters=todays_tasters,
+        followups_open=followups_open,
+        converted_month=converted_month,
+        week_bookings=week_bookings,
+        todays_total=todays_total,
+        todays_counts=todays_counts,
+        todays_by_programme=todays_by_programme,
         month_by_programme=month_by_programme,
         monitor=monitor,
         days_left=days_left,
-        today=today
+        week_start=week_start,
+        week_end=week_end,
     )
 
 

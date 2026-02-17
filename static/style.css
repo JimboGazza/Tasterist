@@ -959,13 +959,14 @@ code {
 /* ---------- DASHBOARD ---------- */
 
 .dashboard-page {
-  max-width: 1100px;
+  max-width: none;
+  width: 100%;
 }
 
 .dashboard-metrics {
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
 }
 
 .dashboard-card {
@@ -1074,6 +1075,109 @@ code {
 
 .monitor-card {
   border-left: 3px solid #3f7f58;
+}
+
+.dashboard-top {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  justify-content: space-between;
+}
+
+.dashboard-top-right {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.dashboard-clock {
+  background: #0d2015;
+  border: 1px solid #214a31;
+  border-radius: 12px;
+  min-width: 150px;
+  padding: 0.4rem 0.65rem;
+}
+
+.dashboard-clock-value {
+  color: #ecfff6;
+  font-size: 1.2rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.dashboard-today-hub h3 {
+  color: #f0fff7;
+  font-size: 1.45rem;
+  font-weight: 800;
+}
+
+.today-programme-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.today-programme-col {
+  background: #0d2015;
+  border: 1px solid #214a31;
+  border-radius: 11px;
+  overflow: hidden;
+}
+
+.today-programme-head {
+  align-items: center;
+  background: #122b1d;
+  border-bottom: 1px solid #214a31;
+  display: flex;
+  justify-content: space-between;
+  padding: 0.5rem 0.62rem;
+}
+
+.today-programme-name {
+  color: #dbffe9;
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+
+.today-programme-body {
+  display: grid;
+  gap: 7px;
+  max-height: 360px;
+  overflow-y: auto;
+  padding: 0.6rem;
+}
+
+.today-taster-row {
+  background: #0f2419;
+  border: 1px solid #214a31;
+  border-radius: 9px;
+  padding: 0.55rem 0.62rem;
+}
+
+.today-taster-name {
+  color: #effff7;
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.today-taster-meta {
+  color: #bfd9cb;
+  font-size: 0.82rem;
+  margin-top: 0.18rem;
+}
+
+.dashboard-secondary-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 1.2fr 1fr;
+}
+
+.dashboard-right-stack {
+  display: grid;
+  gap: 12px;
 }
 
 .monitor-pill {
@@ -1216,7 +1320,13 @@ code {
 
 @media (max-width: 1100px) {
   .dashboard-metrics {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .today-programme-grid {
+    grid-template-columns: 1fr;
+  }
+  .dashboard-secondary-grid {
+    grid-template-columns: 1fr;
   }
   .account-grid {
     grid-template-columns: 1fr;
@@ -1228,7 +1338,10 @@ code {
 
 @media (max-width: 700px) {
   .dashboard-metrics {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .dashboard-top-right {
+    justify-content: flex-start;
   }
   .account-admin-fields {
     grid-template-columns: 1fr;
@@ -1240,6 +1353,12 @@ code {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .task-columns {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 520px) {
+  .dashboard-metrics {
     grid-template-columns: 1fr;
   }
 }
