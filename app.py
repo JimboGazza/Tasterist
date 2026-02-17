@@ -490,8 +490,8 @@ def password_strength_errors(password):
         errors.append("must be at least 7 characters")
     if not re.search(r"[A-Z]", value):
         errors.append("must include an uppercase letter")
-    if not re.search(r"[a-z]", value):
-        errors.append("must include a lowercase letter")
+    if not re.search(r"\d", value):
+        errors.append("must include a number")
     return errors
 
 
