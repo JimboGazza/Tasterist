@@ -129,8 +129,13 @@ def init_db():
             programme TEXT NOT NULL,
             leave_month TEXT NOT NULL,
             leave_date TEXT DEFAULT '',
+            class_day TEXT DEFAULT '',
             session TEXT DEFAULT '',
             class_name TEXT DEFAULT '',
+            removed_la INTEGER DEFAULT 0,
+            removed_bg INTEGER DEFAULT 0,
+            added_to_board INTEGER DEFAULT 0,
+            reason TEXT DEFAULT '',
             email TEXT DEFAULT '',
             source TEXT DEFAULT 'import'
         )
@@ -211,10 +216,20 @@ def init_db():
         """)
     if "leave_date" not in leaver_cols:
         cur.execute("ALTER TABLE leavers ADD COLUMN leave_date TEXT DEFAULT ''")
+    if "class_day" not in leaver_cols:
+        cur.execute("ALTER TABLE leavers ADD COLUMN class_day TEXT DEFAULT ''")
     if "session" not in leaver_cols:
         cur.execute("ALTER TABLE leavers ADD COLUMN session TEXT DEFAULT ''")
     if "class_name" not in leaver_cols:
         cur.execute("ALTER TABLE leavers ADD COLUMN class_name TEXT DEFAULT ''")
+    if "removed_la" not in leaver_cols:
+        cur.execute("ALTER TABLE leavers ADD COLUMN removed_la INTEGER DEFAULT 0")
+    if "removed_bg" not in leaver_cols:
+        cur.execute("ALTER TABLE leavers ADD COLUMN removed_bg INTEGER DEFAULT 0")
+    if "added_to_board" not in leaver_cols:
+        cur.execute("ALTER TABLE leavers ADD COLUMN added_to_board INTEGER DEFAULT 0")
+    if "reason" not in leaver_cols:
+        cur.execute("ALTER TABLE leavers ADD COLUMN reason TEXT DEFAULT ''")
     if "email" not in leaver_cols:
         cur.execute("ALTER TABLE leavers ADD COLUMN email TEXT DEFAULT ''")
 
@@ -693,6 +708,16 @@ def normalise_session_label(value):
     return f"{hour:02d}:{minute}"
 
 
+def extract_day_name(value):
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    for day_name in WEEKDAY_NAMES:
+        if re.search(rf"\b{day_name.lower()}\b", text):
+            return day_name
+    return ""
+
+
 def _programme_tokens(programme):
     p = (programme or "").lower()
     if p == "preschool":
@@ -901,6 +926,52 @@ def _build_column_map(ws, name_header_row, name_cols):
     return out
 
 
+def _build_leaver_column_map(ws, header_row, name_cols):
+    def header_text(col_idx):
+        if col_idx < 1 or col_idx > ws.max_column:
+            return ""
+        v = ws.cell(header_row, col_idx).value
+        return str(v).strip().lower() if v is not None else ""
+
+    def find_col(name_col, fallback_offset, matcher):
+        fallback = name_col + fallback_offset
+        for c in range(name_col + 1, min(name_col + 11, ws.max_column + 1)):
+            if matcher(header_text(c)):
+                return c
+        return fallback
+
+    out = {}
+    for col in name_cols:
+        out[col] = {
+            "day_col": col - 1,
+            "date_col": find_col(
+                col, 1,
+                lambda t: "date" in t and ("leave" in t or "email" in t)
+            ),
+            "removed_la_col": find_col(
+                col, 2,
+                lambda t: ("removed from la" in t) or ("inactive" in t) or ("removed" in t and "la" in t)
+            ),
+            "removed_bg_col": find_col(
+                col, 3,
+                lambda t: ("removed from bg" in t) or ("removed" in t and "bg" in t)
+            ),
+            "board_col": find_col(
+                col, 4,
+                lambda t: ("leavers board" in t) or ("added" in t and "board" in t)
+            ),
+            "reason_col": find_col(
+                col, 5,
+                lambda t: ("reason" in t)
+            ),
+            "added_by_col": find_col(
+                col, 6,
+                lambda t: ("added by" in t) or (t.strip() == "added")
+            ),
+        }
+    return out
+
+
 def _sync_yes_cell(value):
     return "yes" if int(value or 0) == 1 else ""
 
@@ -1072,31 +1143,77 @@ def sync_leaver_to_excel(leaver_row, actor_initials=""):
     header_row, name_cols = _find_leaver_header_row_ws(ws, min(leaver_markers))
     if not header_row or not name_cols:
         return False, "Leaver columns not found"
+    column_map = _build_leaver_column_map(ws, header_row, name_cols)
+    leaver_start_row = min(leaver_markers)
 
-    target_col = name_cols[0]
-    target_row = None
-    for r in range(header_row + 1, ws.max_row + 80):
-        if r > ws.max_row:
-            ws.insert_rows(ws.max_row + 1, 1)
-        existing = ws.cell(r, target_col).value
-        if existing is None or str(existing).strip() == "":
-            target_row = r
+    target_day = extract_day_name(row.get("class_day")) or leave_dt.strftime("%A")
+    target_time = _extract_time(row.get("session"))
+
+    block_state = {
+        col: {"day": "", "time": ""}
+        for col in name_cols
+    }
+    target_slot = None
+    exact_empty_slot = None
+    same_day_slot = None
+    same_time_slot = None
+
+    for r in range(leaver_start_row, ws.max_row + 1):
+        for col in name_cols:
+            cols = column_map[col]
+            day_col = cols["day_col"]
+            day_val = ws.cell(r, day_col).value if day_col >= 1 else ""
+            day_txt = str(day_val).strip() if day_val is not None else ""
+            if day_txt in WEEKDAY_NAMES:
+                block_state[col]["day"] = day_txt
+            parsed_time = _extract_time(day_txt)
+            if parsed_time:
+                block_state[col]["time"] = parsed_time
+
+            if r <= header_row:
+                continue
+
+            name_val = ws.cell(r, col).value
+            name_txt = str(name_val).strip() if name_val is not None else ""
+            same_day = block_state[col]["day"] == target_day if target_day else True
+            same_time = _time_matches(target_time, block_state[col]["time"]) if target_time else True
+
+            if name_txt and name_txt.lower() == str(row.get("child", "")).strip().lower():
+                if same_day and (same_time or not target_time):
+                    target_slot = (r, col, cols)
+                    break
+
+            if not name_txt:
+                if same_day and same_time and exact_empty_slot is None:
+                    exact_empty_slot = (r, col, cols)
+                if same_day and same_day_slot is None:
+                    same_day_slot = (r, col, cols)
+                if same_time and same_time_slot is None:
+                    same_time_slot = (r, col, cols)
+        if target_slot:
             break
-    if target_row is None:
-        return False, "No writable leaver row found"
 
-    ws.cell(target_row, target_col).value = row.get("child", "")
-    if target_col + 1 <= ws.max_column:
-        ws.cell(target_row, target_col + 1).value = leave_dt.strftime("%d/%m/%Y")
+    if target_slot is None:
+        target_slot = exact_empty_slot or same_day_slot or (same_time_slot if not target_day else None)
+    if target_slot is None:
+        return False, "No writable leaver slot found for selected day/time"
 
-    for offset in (2, 3, 4):
-        c = target_col + offset
-        if c > ws.max_column:
-            continue
-        head = ws.cell(header_row, c).value
-        if isinstance(head, str) and "added" in head.lower():
-            ws.cell(target_row, c).value = actor_initials
-            break
+    row_idx, name_col, cols = target_slot
+    ws.cell(row_idx, name_col).value = row.get("child", "")
+    if cols["date_col"] <= ws.max_column:
+        ws.cell(row_idx, cols["date_col"]).value = leave_dt.strftime("%d %b")
+    if cols["removed_la_col"] <= ws.max_column:
+        ws.cell(row_idx, cols["removed_la_col"]).value = _sync_yes_cell(row.get("removed_la", 0))
+    if cols["removed_bg_col"] <= ws.max_column:
+        ws.cell(row_idx, cols["removed_bg_col"]).value = _sync_yes_cell(row.get("removed_bg", 0))
+    if cols["board_col"] <= ws.max_column:
+        ws.cell(row_idx, cols["board_col"]).value = _sync_yes_cell(row.get("added_to_board", 0))
+    if cols["reason_col"] <= ws.max_column:
+        reason_txt = str(row.get("reason") or "").strip()
+        if reason_txt:
+            ws.cell(row_idx, cols["reason_col"]).value = reason_txt
+    if cols["added_by_col"] <= ws.max_column and actor_initials:
+        ws.cell(row_idx, cols["added_by_col"]).value = actor_initials
 
     try:
         wb.save(workbook)
@@ -1520,8 +1637,13 @@ def add_leaver():
         programme = request.form.get("programme", programme)
         leave_date = request.form.get("leave_date", "").strip()
         session_label = request.form.get("session", "").strip()
+        class_day = request.form.get("class_day", "").strip()
         class_name = request.form.get("class_name", "").strip()
         manual_session = request.form.get("manual_session", "").strip()
+        removed_la = 1 if request.form.get("removed_la") == "1" else 0
+        removed_bg = 1 if request.form.get("removed_bg") == "1" else 0
+        added_to_board = 1 if request.form.get("added_to_board") == "1" else 0
+        reason = request.form.get("reason", "").strip()
         email = request.form.get("email", "").strip()
         sync_excel = request.form.get("sync_excel") == "1"
 
@@ -1531,8 +1653,12 @@ def add_leaver():
 
         if session_label == "__manual__":
             session_label = normalise_session_label(manual_session)
+            if not class_day:
+                class_day = extract_day_name(manual_session)
             class_name = class_name or "Manual Session"
         else:
+            if not class_day:
+                class_day = extract_day_name(session_label)
             session_label = normalise_session_label(session_label)
 
         if not session_label:
@@ -1540,7 +1666,10 @@ def add_leaver():
             return redirect(request.url)
 
         try:
-            leave_month = datetime.fromisoformat(leave_date).strftime("%Y-%m")
+            leave_dt = datetime.fromisoformat(leave_date).date()
+            leave_month = leave_dt.strftime("%Y-%m")
+            if not class_day:
+                class_day = leave_dt.strftime("%A")
         except ValueError:
             flash("Invalid leave date", "danger")
             return redirect(request.url)
@@ -1549,16 +1678,23 @@ def add_leaver():
         db.execute("""
             INSERT INTO leavers (
                 child, programme, leave_month, leave_date,
-                session, class_name, email, source
+                class_day, session, class_name,
+                removed_la, removed_bg, added_to_board, reason,
+                email, source
             )
-            VALUES (?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
             child,
             programme,
             leave_month,
             leave_date,
+            class_day,
             session_label,
             class_name,
+            removed_la,
+            removed_bg,
+            added_to_board,
+            reason,
             email,
             "manual"
         ))
@@ -1579,7 +1715,7 @@ def add_leaver():
             "add_leaver",
             entity_type="leaver",
             entity_id=leaver_id,
-            details=f"{child} | {programme} | {leave_date} | excel_sync={sync_msg}",
+            details=f"{child} | {programme} | {class_day} {session_label} | {leave_date} | excel_sync={sync_msg}",
             status=sync_status,
         )
 
@@ -1669,7 +1805,7 @@ def admin_tasks():
             no_show_by_assignment["All|all"].append(r)
 
     leaver_rows = db.execute("""
-        SELECT child, programme, leave_date, session, class_name
+        SELECT child, programme, leave_date, class_day, session, class_name
         FROM leavers
         WHERE leave_month=?
         ORDER BY leave_date DESC, programme, child
@@ -1680,8 +1816,11 @@ def admin_tasks():
     for row in leaver_rows:
         row_dict = dict(row)
         day_name = ""
+        class_day = extract_day_name(row_dict.get("class_day"))
+        if class_day:
+            day_name = class_day
         leave_date = (row_dict["leave_date"] or "").strip()
-        if leave_date:
+        if not day_name and leave_date:
             try:
                 day_name = datetime.fromisoformat(leave_date).strftime("%A")
             except ValueError:
