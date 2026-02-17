@@ -67,6 +67,8 @@ LOGIN_RATE_LIMIT_WINDOW_SEC = int(os.environ.get("TASTERIST_LOGIN_WINDOW_SEC", "
 LOGIN_RATE_LIMIT_ATTEMPTS = int(os.environ.get("TASTERIST_LOGIN_MAX_ATTEMPTS", "8"))
 LOGIN_LOCKOUT_SEC = int(os.environ.get("TASTERIST_LOGIN_LOCKOUT_SEC", "900"))
 LOGIN_ATTEMPTS = {}
+SQLITE_BUSY_TIMEOUT_MS = int(os.environ.get("TASTERIST_SQLITE_BUSY_TIMEOUT_MS", "60000"))
+DB_INIT_MAX_RETRIES = int(os.environ.get("TASTERIST_DB_INIT_MAX_RETRIES", "8"))
 
 
 def is_env_true(name, default="0"):
@@ -125,7 +127,8 @@ def get_import_source_folder():
 
 def get_db():
     if "_db" not in g:
-        g._db = sqlite3.connect(DB_FILE)
+        g._db = sqlite3.connect(DB_FILE, timeout=max(5, SQLITE_BUSY_TIMEOUT_MS // 1000))
+        g._db.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
         g._db.row_factory = sqlite3.Row
     return g._db
 
@@ -153,9 +156,11 @@ def apply_security_headers(response):
     return response
 
 
-def init_db():
-    db = sqlite3.connect(DB_FILE)
+def _init_db_once():
+    db = sqlite3.connect(DB_FILE, timeout=max(5, SQLITE_BUSY_TIMEOUT_MS // 1000))
     cur = db.cursor()
+    cur.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
+    cur.execute("PRAGMA journal_mode=WAL")
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS tasters (
@@ -394,6 +399,19 @@ def init_db():
 
     db.commit()
     db.close()
+
+
+def init_db():
+    for attempt in range(1, DB_INIT_MAX_RETRIES + 1):
+        try:
+            _init_db_once()
+            return
+        except sqlite3.OperationalError as exc:
+            locked = "locked" in str(exc).lower()
+            if not locked or attempt == DB_INIT_MAX_RETRIES:
+                raise
+            print(f"⚠️ DB init lock detected, retrying ({attempt}/{DB_INIT_MAX_RETRIES})...")
+            time.sleep(1.5)
 
 
 def current_user():
@@ -2744,9 +2762,11 @@ def cloud_backup():
     tmp_file_path = tmp_file.name
     tmp_file.close()
 
-    src = sqlite3.connect(DB_FILE)
+    src = sqlite3.connect(DB_FILE, timeout=max(5, SQLITE_BUSY_TIMEOUT_MS // 1000))
+    src.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
     try:
-        dst = sqlite3.connect(tmp_file_path)
+        dst = sqlite3.connect(tmp_file_path, timeout=max(5, SQLITE_BUSY_TIMEOUT_MS // 1000))
+        dst.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
         try:
             src.backup(dst)
         finally:
