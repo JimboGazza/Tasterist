@@ -5,12 +5,59 @@
   <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
     <div>
       <h2 class="text-white mb-1">Admin Console</h2>
-      <p class="text-muted mb-0">Manage accounts and review audit logs (admin only).</p>
+      <p class="text-muted mb-0">Manage accounts and review audit logs (owner only).</p>
     </div>
     <a href="{{ url_for('account_settings') }}" class="btn btn-glass">Back to Settings</a>
   </div>
 
   <div class="dashboard-card mb-4">
+    <h5 class="mb-2">Create Account</h5>
+    <p class="dashboard-subtle mb-3">Only owner can create staff/admin accounts.</p>
+    <form method="post" class="account-admin-form mb-4">
+      {{ csrf_field() }}
+      <input type="hidden" name="action" value="create_user">
+      <div class="account-admin-fields">
+        <div>
+          <label class="form-label">Full Name</label>
+          <input name="full_name" class="form-control" required>
+        </div>
+        <div>
+          <label class="form-label">Email</label>
+          <input name="username" type="email" class="form-control" required>
+        </div>
+        <div>
+          <label class="form-label">Role</label>
+          <select name="role" class="form-select">
+            <option value="staff" selected>Staff</option>
+            <option value="admin">Admin</option>
+          </select>
+        </div>
+        <div>
+          <label class="form-label">Temporary Password</label>
+          <input name="password" type="password" class="form-control" required>
+        </div>
+      </div>
+
+      <div class="dashboard-label mt-2 mb-2">Admin Day Ownership (Optional)</div>
+      <div class="admin-days-grid mb-3">
+        <div class="admin-days-head"></div>
+        <div class="admin-days-head">Preschool</div>
+        <div class="admin-days-head">Honley</div>
+        <div class="admin-days-head">Lockwood</div>
+        {% for row in grouped_options %}
+          <div class="admin-days-day">{{ row.day_name }}</div>
+          {% for cell in row.cells %}
+            <label class="admin-days-cell admin-days-btn">
+              <input class="admin-days-input" type="checkbox" name="admin_days" value="{{ cell.value }}">
+              <span class="admin-days-hit"></span>
+            </label>
+          {% endfor %}
+        {% endfor %}
+      </div>
+
+      <button type="submit" class="btn btn-green btn-sm">Create Account</button>
+    </form>
+
     <h5 class="mb-2">Account Management</h5>
     <p class="dashboard-subtle mb-3">Edit profile details, role, password, admin-day ownership, or remove accounts.</p>
     <div class="account-admin-users">
@@ -28,6 +75,7 @@
         </summary>
         <div class="account-admin-body">
           <form method="post" class="account-admin-form">
+            {{ csrf_field() }}
             <input type="hidden" name="action" value="save_user">
             <input type="hidden" name="user_id" value="{{ u.id }}">
 
@@ -42,10 +90,14 @@
               </div>
               <div>
                 <label class="form-label">Role</label>
-                <select name="role" class="form-select">
-                  <option value="staff" {% if u.role != "admin" %}selected{% endif %}>Staff</option>
+                <select name="role" class="form-select" {% if u.role == "owner" %}disabled{% endif %}>
+                  <option value="staff" {% if u.role == "staff" %}selected{% endif %}>Staff</option>
                   <option value="admin" {% if u.role == "admin" %}selected{% endif %}>Admin</option>
+                  <option value="owner" {% if u.role == "owner" %}selected{% endif %} disabled>Owner</option>
                 </select>
+                {% if u.role == "owner" %}
+                <input type="hidden" name="role" value="owner">
+                {% endif %}
               </div>
               <div>
                 <label class="form-label">Set New Password</label>
@@ -74,9 +126,12 @@
           </form>
 
           <form method="post" class="account-admin-danger" onsubmit="return confirm('Remove this account? This cannot be undone.');">
+            {{ csrf_field() }}
             <input type="hidden" name="action" value="delete_user">
             <input type="hidden" name="user_id" value="{{ u.id }}">
-            <button type="submit" class="btn btn-danger-soft btn-sm">Remove Account</button>
+            <button type="submit" class="btn btn-danger-soft btn-sm" {% if u.role == 'owner' %}disabled{% endif %}>
+              Remove Account
+            </button>
           </form>
         </div>
       </details>

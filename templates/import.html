@@ -24,9 +24,16 @@
         <span class="import-tag">Preschool</span>
         <span class="import-tag">2025 + 2026</span>
       </div>
-      <a href="{{ url_for('import_run') }}" class="btn btn-green btn-lg w-100 import-run-btn">
-        Run Import Now
-      </a>
+      {% if is_admin_user %}
+      <form method="post" action="{{ url_for('import_run') }}">
+        {{ csrf_field() }}
+        <button type="submit" class="btn btn-green btn-lg w-100 import-run-btn">
+          Run Import Now
+        </button>
+      </form>
+      {% else %}
+      <div class="alert alert-dark mb-0">Only admin-level accounts can run imports.</div>
+      {% endif %}
     </div>
   </div>
 

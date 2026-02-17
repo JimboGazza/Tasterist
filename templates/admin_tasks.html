@@ -76,6 +76,7 @@
         </div>
         <div class="followup-actions">
           <form method="post" action="{{ url_for('toggle', taster_id=t.id, field='attended') }}">
+            {{ csrf_field() }}
             <button class="toggle-btn attended {% if t.attended %}active{% endif %}">
               Attended
             </button>
@@ -85,6 +86,7 @@
           <button class="toggle-btn contact disabled" disabled>Contacted</button>
           {% else %}
           <form method="post" action="{{ url_for('admin_mark_contacted', taster_id=t.id) }}">
+            {{ csrf_field() }}
             <button class="toggle-btn contact {% if t.reschedule_contacted %}active{% endif %}">
               {% if t.reschedule_contacted %}Contacted{% else %}Contact{% endif %}
             </button>
@@ -92,18 +94,21 @@
           {% endif %}
 
           <form method="post" action="{{ url_for('toggle', taster_id=t.id, field='club_fees') }}">
+            {{ csrf_field() }}
             <button class="toggle-btn club-fees {% if t.club_fees %}active{% endif %}">
               Club Fees
             </button>
           </form>
 
           <form method="post" action="{{ url_for('toggle', taster_id=t.id, field='bg') }}">
+            {{ csrf_field() }}
             <button class="toggle-btn bg {% if t.bg %}active{% endif %}">
               BG
             </button>
           </form>
 
           <form method="post" action="{{ url_for('toggle', taster_id=t.id, field='badge') }}">
+            {{ csrf_field() }}
             <button class="toggle-btn badge {% if t.badge %}active{% endif %}">
               Badge
             </button>

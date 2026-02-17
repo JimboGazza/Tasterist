@@ -8,6 +8,7 @@
   <h5 class="text-white">Database Tools</h5>
 
   <form method="post">
+    {{ csrf_field() }}
     <button name="action" value="clear"
             class="btn btn-danger w-100 mb-2">
       DELETE ALL TASTERS
@@ -16,9 +17,12 @@
 
   <hr class="text-white">
 
-  <a href="{{ url_for('import_run') }}" class="btn btn-glass me-2">
-    Run Import
-  </a>
+  <form method="post" action="{{ url_for('import_run') }}" class="d-inline">
+    {{ csrf_field() }}
+    <button type="submit" class="btn btn-glass me-2">
+      Run Import
+    </button>
+  </form>
   <a href="{{ url_for('all_tasters') }}" class="btn btn-glass">
     View All Tasters
   </a>

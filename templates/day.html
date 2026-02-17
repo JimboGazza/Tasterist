@@ -71,24 +71,28 @@
         <div class="day-actions">
 
           <form method="post" action="{{ url_for('toggle', taster_id=r.id, field='attended') }}">
+            {{ csrf_field() }}
             <button class="toggle-btn attended {% if r.attended %}active{% endif %}">
               Attended
             </button>
           </form>
 
           <form method="post" action="{{ url_for('toggle', taster_id=r.id, field='club_fees') }}">
+            {{ csrf_field() }}
             <button class="toggle-btn club-fees {% if r.club_fees %}active{% endif %}">
               Club Fees
             </button>
           </form>
 
           <form method="post" action="{{ url_for('toggle', taster_id=r.id, field='bg') }}">
+            {{ csrf_field() }}
             <button class="toggle-btn bg {% if r.bg %}active{% endif %}">
               BG
             </button>
           </form>
 
           <form method="post" action="{{ url_for('toggle', taster_id=r.id, field='badge') }}">
+            {{ csrf_field() }}
             <button class="toggle-btn badge {% if r.badge %}active{% endif %}">
               Badge
             </button>

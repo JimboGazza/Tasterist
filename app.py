@@ -11,15 +11,18 @@ import re
 import subprocess
 import json
 import tempfile
+import secrets
+import time
 from functools import wraps
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from flask import (
     Flask, g, render_template, request,
-    redirect, url_for, flash, session, send_file
+    redirect, url_for, flash, session, send_file, abort
 )
 from werkzeug.security import generate_password_hash, check_password_hash
+from markupsafe import Markup
 
 import pandas as pd
 from openpyxl import load_workbook
@@ -49,6 +52,43 @@ MONTH_NAMES = [
     "January", "February", "March", "April", "May", "June",
     "July", "August", "September", "October", "November", "December"
 ]
+OWNER_EMAIL = os.environ.get("TASTERIST_OWNER_EMAIL", "james@penninegymnastics.com").strip().lower()
+OWNER_NAME = os.environ.get("TASTERIST_OWNER_NAME", "James Gardner").strip() or "James Gardner"
+WEAK_PASSWORDS = {
+    "admin123",
+    "jammy",
+    "password",
+    "12345",
+    "123456",
+    "qwerty",
+    "letmein",
+}
+LOGIN_RATE_LIMIT_WINDOW_SEC = int(os.environ.get("TASTERIST_LOGIN_WINDOW_SEC", "900"))
+LOGIN_RATE_LIMIT_ATTEMPTS = int(os.environ.get("TASTERIST_LOGIN_MAX_ATTEMPTS", "8"))
+LOGIN_LOCKOUT_SEC = int(os.environ.get("TASTERIST_LOGIN_LOCKOUT_SEC", "900"))
+LOGIN_ATTEMPTS = {}
+
+
+def is_env_true(name, default="0"):
+    return os.environ.get(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _running_in_prod():
+    if is_env_true("TASTERIST_FORCE_SECURE_COOKIES", "0"):
+        return True
+    if os.environ.get("RENDER"):
+        return True
+    if os.environ.get("TASTERIST_CANONICAL_HOST", "").strip():
+        return True
+    return False
+
+
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=_running_in_prod(),
+    PERMANENT_SESSION_LIFETIME=timedelta(hours=12),
+)
 
 
 def log_runtime_environment():
@@ -100,6 +140,17 @@ def close_db(exception):
     db = g.pop("_db", None)
     if db:
         db.close()
+
+
+@app.after_request
+def apply_security_headers(response):
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
+    if _running_in_prod():
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    return response
 
 
 def init_db():
@@ -163,7 +214,8 @@ def init_db():
             username TEXT NOT NULL UNIQUE,
             password_hash TEXT NOT NULL,
             full_name TEXT NOT NULL DEFAULT '',
-            role TEXT NOT NULL DEFAULT 'admin',
+            role TEXT NOT NULL DEFAULT 'staff',
+            password_must_change INTEGER NOT NULL DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -267,6 +319,8 @@ def init_db():
     }
     if "full_name" not in user_cols:
         cur.execute("ALTER TABLE users ADD COLUMN full_name TEXT NOT NULL DEFAULT ''")
+    if "password_must_change" not in user_cols:
+        cur.execute("ALTER TABLE users ADD COLUMN password_must_change INTEGER NOT NULL DEFAULT 0")
 
     cur.execute("DROP INDEX IF EXISTS uniq_class_session")
     cur.execute("""
@@ -278,35 +332,65 @@ def init_db():
     """)
 
     users_count = cur.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    owner_bootstrap_password = os.environ.get("TASTERIST_OWNER_BOOTSTRAP_PASSWORD", "").strip()
     if users_count == 0:
-        default_user = os.environ.get("TASTERIST_ADMIN_USER", "admin")
-        default_password = os.environ.get("TASTERIST_ADMIN_PASSWORD", "admin123")
+        if not owner_bootstrap_password:
+            owner_bootstrap_password = secrets.token_urlsafe(16)
+            print("⚠️ No users found: created owner with generated bootstrap password.")
+            print("⚠️ Set TASTERIST_OWNER_BOOTSTRAP_PASSWORD for predictable first boot credentials.")
+        owner_must_change = 1 if (password_strength_errors(owner_bootstrap_password) or is_password_weak_literal(owner_bootstrap_password)) else 0
         cur.execute("""
-            INSERT INTO users (username, password_hash, full_name, role)
-            VALUES (?, ?, ?, 'admin')
-        """, (default_user, generate_password_hash(default_password), "Admin"))
+            INSERT INTO users (username, password_hash, full_name, role, password_must_change)
+            VALUES (?, ?, ?, 'owner', ?)
+        """, (OWNER_EMAIL, generate_password_hash(owner_bootstrap_password), OWNER_NAME, owner_must_change))
 
-    # Requested owner account.
     existing_owner = cur.execute(
-        "SELECT id FROM users WHERE username=?",
-        ("james@penninegymnastics.com",)
+        "SELECT id FROM users WHERE lower(username)=?",
+        (OWNER_EMAIL,)
     ).fetchone()
-    if not existing_owner:
-        cur.execute("""
-            INSERT INTO users (username, password_hash, full_name, role)
-            VALUES (?, ?, ?, 'admin')
-        """, (
-            "james@penninegymnastics.com",
-            generate_password_hash("jammy"),
-            "James"
-        ))
-    else:
+    if existing_owner:
         cur.execute("""
             UPDATE users
-            SET full_name='James Gardner'
-            WHERE username='james@penninegymnastics.com'
-              AND (full_name IS NULL OR trim(full_name) IN ('', 'James'))
-        """)
+            SET role='owner',
+                full_name=CASE
+                    WHEN full_name IS NULL OR trim(full_name)='' THEN ?
+                    ELSE full_name
+                END
+            WHERE id=?
+        """, (OWNER_NAME, existing_owner["id"] if isinstance(existing_owner, sqlite3.Row) else existing_owner[0]))
+    else:
+        if not owner_bootstrap_password:
+            owner_bootstrap_password = secrets.token_urlsafe(16)
+            print("⚠️ Owner account missing: created owner with generated bootstrap password.")
+        owner_must_change = 1 if (password_strength_errors(owner_bootstrap_password) or is_password_weak_literal(owner_bootstrap_password)) else 0
+        cur.execute("""
+            INSERT INTO users (username, password_hash, full_name, role, password_must_change)
+            VALUES (?, ?, ?, 'owner', ?)
+        """, (OWNER_EMAIL, generate_password_hash(owner_bootstrap_password), OWNER_NAME, owner_must_change))
+
+    # Remove insecure historical default admin bootstrap accounts.
+    insecure_usernames = {
+        "admin",
+        os.environ.get("TASTERIST_ADMIN_USER", "admin").strip().lower(),
+    }
+    for username in insecure_usernames:
+        if not username or username == OWNER_EMAIL:
+            continue
+        cur.execute("DELETE FROM user_admin_days WHERE user_id IN (SELECT id FROM users WHERE lower(username)=?)", (username,))
+        cur.execute("DELETE FROM users WHERE lower(username)=?", (username,))
+
+    # Remove non-owner users still using known weak/default passwords.
+    user_rows = cur.execute("SELECT id, username, password_hash FROM users").fetchall()
+    for row in user_rows:
+        row_id = row["id"] if isinstance(row, sqlite3.Row) else row[0]
+        row_username = (row["username"] if isinstance(row, sqlite3.Row) else row[1]).strip().lower()
+        row_hash = row["password_hash"] if isinstance(row, sqlite3.Row) else row[2]
+        if any(check_password_hash(row_hash, weak) for weak in WEAK_PASSWORDS):
+            if row_username == OWNER_EMAIL:
+                cur.execute("UPDATE users SET password_must_change=1 WHERE id=?", (row_id,))
+                continue
+            cur.execute("DELETE FROM user_admin_days WHERE user_id=?", (row_id,))
+            cur.execute("DELETE FROM users WHERE id=?", (row_id,))
 
     db.commit()
     db.close()
@@ -320,7 +404,7 @@ def current_user():
     if not user_id:
         return None
     row = query(
-        "SELECT id, username, full_name, role FROM users WHERE id=?",
+        "SELECT id, username, full_name, role, password_must_change FROM users WHERE id=?",
         (user_id,)
     )
     if not row:
@@ -348,12 +432,102 @@ def user_initials(text):
 def is_admin_user(user):
     if not user:
         return False
-    if user.get("role") == "admin":
+    if user.get("role") in {"admin", "owner"}:
         return True
-    return user.get("username", "").lower() in {
-        "james@penninegymnastics.com",
-        os.environ.get("TASTERIST_ADMIN_USER", "admin").lower(),
-    }
+    return user.get("username", "").lower() == OWNER_EMAIL
+
+
+def is_owner_user(user):
+    if not user:
+        return False
+    return user.get("role") == "owner" or user.get("username", "").lower() == OWNER_EMAIL
+
+
+def owner_required(view_func):
+    @wraps(view_func)
+    def wrapped(*args, **kwargs):
+        user = current_user()
+        if not is_owner_user(user):
+            flash("Owner access only.", "warning")
+            return redirect(url_for("dashboard"))
+        return view_func(*args, **kwargs)
+    return wrapped
+
+
+def password_strength_errors(password):
+    value = password or ""
+    errors = []
+    if len(value) < 10:
+        errors.append("must be at least 10 characters")
+    if not re.search(r"[A-Z]", value):
+        errors.append("must include an uppercase letter")
+    if not re.search(r"[a-z]", value):
+        errors.append("must include a lowercase letter")
+    if not re.search(r"\d", value):
+        errors.append("must include a number")
+    return errors
+
+
+def is_password_weak_literal(password):
+    return (password or "").strip().lower() in WEAK_PASSWORDS
+
+
+def get_csrf_token():
+    token = session.get("_csrf_token")
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session["_csrf_token"] = token
+    return token
+
+
+def csrf_field():
+    token = get_csrf_token()
+    return Markup(f'<input type="hidden" name="_csrf_token" value="{token}">')
+
+
+def validate_csrf_token():
+    sent = request.form.get("_csrf_token", "")
+    expected = session.get("_csrf_token", "")
+    if not sent or not expected:
+        return False
+    return secrets.compare_digest(sent, expected)
+
+
+def client_ip_key():
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    if forwarded:
+        return forwarded.split(",", 1)[0].strip() or "unknown"
+    return request.remote_addr or "unknown"
+
+
+def is_login_rate_limited(ip_key):
+    now = time.time()
+    state = LOGIN_ATTEMPTS.get(ip_key)
+    if not state:
+        return False, 0
+    if state.get("locked_until", 0) > now:
+        wait_sec = int(state["locked_until"] - now)
+        return True, max(wait_sec, 1)
+    if now - state.get("window_start", 0) > LOGIN_RATE_LIMIT_WINDOW_SEC:
+        LOGIN_ATTEMPTS.pop(ip_key, None)
+    return False, 0
+
+
+def record_failed_login(ip_key):
+    now = time.time()
+    state = LOGIN_ATTEMPTS.get(ip_key)
+    if not state or now - state.get("window_start", 0) > LOGIN_RATE_LIMIT_WINDOW_SEC:
+        state = {"count": 0, "window_start": now, "locked_until": 0}
+    state["count"] += 1
+    if state["count"] >= LOGIN_RATE_LIMIT_ATTEMPTS:
+        state["locked_until"] = now + LOGIN_LOCKOUT_SEC
+        state["count"] = 0
+        state["window_start"] = now
+    LOGIN_ATTEMPTS[ip_key] = state
+
+
+def clear_login_failures(ip_key):
+    LOGIN_ATTEMPTS.pop(ip_key, None)
 
 
 def admin_required(view_func):
@@ -397,7 +571,10 @@ def inject_current_user():
     return {
         "current_user": user,
         "is_admin_user": is_admin_user(user),
+        "is_owner_user": is_owner_user(user),
         "user_initials": user_initials,
+        "csrf_token": get_csrf_token,
+        "csrf_field": csrf_field,
     }
 
 
@@ -417,12 +594,30 @@ def enforce_canonical_host():
 
 
 @app.before_request
+def enforce_csrf():
+    if request.method not in {"POST", "PUT", "PATCH", "DELETE"}:
+        return None
+    if request.endpoint in {"static", "health"}:
+        return None
+    if not validate_csrf_token():
+        abort(400, description="Invalid CSRF token")
+    return None
+
+
+@app.before_request
 def require_login():
     allowed = {"login", "signup", "static", "health"}
     if request.endpoint in allowed:
         return None
-    if current_user() is None:
+    user = current_user()
+    if user is None:
         return redirect(url_for("login", next=request.path))
+    must_change = bool(session.get("must_change_password")) or bool(user.get("password_must_change"))
+    if must_change and request.endpoint not in {
+        "account_settings", "logout", "static", "health"
+    }:
+        flash("Security update: set a stronger password to continue.", "warning")
+        return redirect(url_for("account_settings"))
     return None
 
 
@@ -432,21 +627,36 @@ def login():
         return redirect(url_for("dashboard"))
 
     if request.method == "POST":
+        ip_key = client_ip_key()
+        limited, wait_sec = is_login_rate_limited(ip_key)
+        if limited:
+            flash(f"Too many sign-in attempts. Try again in about {wait_sec} seconds.", "danger")
+            return render_template("login.html"), 429
+
         username = request.form.get("username", "").strip().lower()
         password = request.form.get("password", "")
         if not username or not password:
+            record_failed_login(ip_key)
             flash("Enter username and password.", "warning")
             return render_template("login.html"), 400
 
         user_rows = query(
-            "SELECT id, username, password_hash FROM users WHERE username=?",
+            "SELECT id, username, password_hash, password_must_change FROM users WHERE username=?",
             (username,)
         )
         if not user_rows or not check_password_hash(user_rows[0]["password_hash"], password):
+            record_failed_login(ip_key)
             flash("Invalid username or password.", "danger")
             return render_template("login.html"), 401
 
+        clear_login_failures(ip_key)
         session["user_id"] = user_rows[0]["id"]
+        session.permanent = True
+        session["must_change_password"] = bool(
+            user_rows[0]["password_must_change"]
+            or password_strength_errors(password)
+            or is_password_weak_literal(password)
+        )
         log_audit("login", entity_type="user", entity_id=user_rows[0]["id"], details="Successful login")
         if should_run_login_import():
             rc, _ = run_import_process(trigger="login")
@@ -468,6 +678,10 @@ def login():
         else:
             flash("Signed in.", "success")
 
+        if session.get("must_change_password"):
+            flash("Security update: please change your password now.", "warning")
+            return redirect(url_for("account_settings"))
+
         target = request.args.get("next")
         if not target or not target.startswith("/"):
             target = url_for("dashboard")
@@ -478,43 +692,7 @@ def login():
 
 @app.route("/signup", methods=["GET", "POST"])
 def signup():
-    if current_user() is not None:
-        return redirect(url_for("dashboard"))
-
-    if request.method == "POST":
-        full_name = request.form.get("full_name", "").strip()
-        username = request.form.get("username", "").strip().lower()
-        password = request.form.get("password", "")
-        confirm_password = request.form.get("confirm_password", "")
-
-        if not full_name or not username or not password:
-            flash("Please complete all required fields.", "warning")
-            return render_template("signup.html"), 400
-        if password != confirm_password:
-            flash("Passwords do not match.", "danger")
-            return render_template("signup.html"), 400
-        if len(password) < 5:
-            flash("Password must be at least 5 characters.", "warning")
-            return render_template("signup.html"), 400
-
-        db = get_db()
-        existing = db.execute(
-            "SELECT id FROM users WHERE username=?",
-            (username,)
-        ).fetchone()
-        if existing:
-            flash("That email is already registered.", "warning")
-            return render_template("signup.html"), 409
-
-        db.execute("""
-            INSERT INTO users (username, password_hash, full_name, role)
-            VALUES (?, ?, ?, 'staff')
-        """, (username, generate_password_hash(password), full_name))
-        db.commit()
-        flash("Account created. Please sign in.", "success")
-        return redirect(url_for("login"))
-
-    return render_template("signup.html")
+    abort(404)
 
 
 @app.route("/logout", methods=["POST"])
@@ -2047,17 +2225,21 @@ def account_settings():
             if not row or not check_password_hash(row["password_hash"], current_password):
                 flash("Current password is incorrect.", "danger")
                 return redirect(url_for("account_settings"))
-            if len(new_password) < 5:
-                flash("New password must be at least 5 characters.", "warning")
+            password_errors = password_strength_errors(new_password)
+            if is_password_weak_literal(new_password):
+                password_errors.append("must not use weak/default passwords")
+            if password_errors:
+                flash("New password " + "; ".join(password_errors) + ".", "warning")
                 return redirect(url_for("account_settings"))
             if new_password != confirm_password:
                 flash("New password and confirmation do not match.", "warning")
                 return redirect(url_for("account_settings"))
             db.execute(
-                "UPDATE users SET password_hash=? WHERE id=?",
+                "UPDATE users SET password_hash=?, password_must_change=0 WHERE id=?",
                 (generate_password_hash(new_password), user["id"])
             )
             db.commit()
+            session.pop("must_change_password", None)
             log_audit("change_password", entity_type="user", entity_id=user["id"], details="Password updated")
             flash("Password updated.", "success")
             return redirect(url_for("account_settings"))
@@ -2137,13 +2319,66 @@ def account_settings():
 
 
 @app.route("/account/admin", methods=["GET", "POST"])
-@admin_required
+@owner_required
 def account_admin():
     db = get_db()
     admin_user = current_user()
 
     if request.method == "POST":
         action = request.form.get("action", "").strip()
+        if action == "create_user":
+            full_name = request.form.get("full_name", "").strip()
+            username = request.form.get("username", "").strip().lower()
+            role = request.form.get("role", "staff").strip().lower()
+            password = request.form.get("password", "")
+            selected_values = request.form.getlist("admin_days")
+
+            if not full_name or not username:
+                flash("Name and email are required.", "warning")
+                return redirect(url_for("account_admin"))
+            if role not in {"admin", "staff"}:
+                role = "staff"
+            password_errors = password_strength_errors(password)
+            if is_password_weak_literal(password):
+                password_errors.append("must not use weak/default passwords")
+            if password_errors:
+                flash("Password " + "; ".join(password_errors) + ".", "warning")
+                return redirect(url_for("account_admin"))
+
+            existing = db.execute(
+                "SELECT id FROM users WHERE username=?",
+                (username,)
+            ).fetchone()
+            if existing:
+                flash("That email is already used by another account.", "warning")
+                return redirect(url_for("account_admin"))
+
+            db.execute("""
+                INSERT INTO users (username, password_hash, full_name, role, password_must_change)
+                VALUES (?, ?, ?, ?, 1)
+            """, (username, generate_password_hash(password), full_name, role))
+            target_user_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+            for value in selected_values:
+                if "|" not in value:
+                    continue
+                day_name, programme = value.split("|", 1)
+                if day_name not in DAY_ORDER or programme not in {"preschool", "honley", "lockwood"}:
+                    continue
+                db.execute("""
+                    INSERT OR IGNORE INTO user_admin_days (user_id, day_name, programme)
+                    VALUES (?, ?, ?)
+                """, (target_user_id, day_name, programme))
+            db.commit()
+            log_audit(
+                "admin_create_user",
+                entity_type="user",
+                entity_id=target_user_id,
+                details=f"Created account {username} role={role} admin_days={len(selected_values)}",
+            )
+            flash(f"Created account: {username}", "success")
+            return redirect(url_for("account_admin"))
+
         user_id_raw = request.form.get("user_id", "").strip()
         try:
             target_user_id = int(user_id_raw)
@@ -2164,12 +2399,17 @@ def account_admin():
                 flash("You cannot remove your own account.", "warning")
                 return redirect(url_for("account_admin"))
 
-            if (target_user["role"] or "").lower() == "admin":
+            target_role = (target_user["role"] or "").lower()
+            if target_role == "owner":
+                flash("Owner account cannot be removed.", "warning")
+                return redirect(url_for("account_admin"))
+
+            if target_role == "admin":
                 admin_count = db.execute(
-                    "SELECT COUNT(*) AS c FROM users WHERE lower(role)='admin'"
+                    "SELECT COUNT(*) AS c FROM users WHERE lower(role) IN ('admin','owner')"
                 ).fetchone()["c"]
                 if admin_count <= 1:
-                    flash("Cannot remove the last admin account.", "warning")
+                    flash("Cannot remove the last admin-level account.", "warning")
                     return redirect(url_for("account_admin"))
 
             db.execute("DELETE FROM user_admin_days WHERE user_id=?", (target_user_id,))
@@ -2199,6 +2439,10 @@ def account_admin():
             if role not in {"admin", "staff"}:
                 role = "staff"
 
+            target_role = (target_user["role"] or "").lower()
+            if target_role == "owner":
+                role = "owner"
+
             username_conflict = db.execute(
                 "SELECT id FROM users WHERE username=? AND id<>?",
                 (username, target_user_id)
@@ -2207,22 +2451,26 @@ def account_admin():
                 flash("That email is already used by another account.", "warning")
                 return redirect(url_for("account_admin"))
 
-            if admin_user and target_user_id == admin_user["id"] and role != "admin":
+            if admin_user and target_user_id == admin_user["id"] and role not in {"admin", "owner"}:
                 flash("You cannot remove your own admin role.", "warning")
                 return redirect(url_for("account_admin"))
 
             old_role = (target_user["role"] or "").lower()
             if old_role == "admin" and role != "admin":
                 admin_count = db.execute(
-                    "SELECT COUNT(*) AS c FROM users WHERE lower(role)='admin'"
+                    "SELECT COUNT(*) AS c FROM users WHERE lower(role) IN ('admin','owner')"
                 ).fetchone()["c"]
                 if admin_count <= 1:
-                    flash("Cannot demote the last admin account.", "warning")
+                    flash("Cannot demote the last admin-level account.", "warning")
                     return redirect(url_for("account_admin"))
 
-            if new_password and len(new_password) < 5:
-                flash("New password must be at least 5 characters.", "warning")
-                return redirect(url_for("account_admin"))
+            if new_password:
+                password_errors = password_strength_errors(new_password)
+                if is_password_weak_literal(new_password):
+                    password_errors.append("must not use weak/default passwords")
+                if password_errors:
+                    flash("New password " + "; ".join(password_errors) + ".", "warning")
+                    return redirect(url_for("account_admin"))
 
             db.execute(
                 "UPDATE users SET full_name=?, username=?, role=? WHERE id=?",
@@ -2230,7 +2478,7 @@ def account_admin():
             )
             if new_password:
                 db.execute(
-                    "UPDATE users SET password_hash=? WHERE id=?",
+                    "UPDATE users SET password_hash=?, password_must_change=1 WHERE id=?",
                     (generate_password_hash(new_password), target_user_id)
                 )
 
@@ -2420,6 +2668,10 @@ def add():
 
 @app.route("/_routes")
 def show_routes():
+    if not is_env_true("TASTERIST_DEV_TOOLS_ENABLED", "0"):
+        abort(404)
+    if not is_owner_user(current_user()):
+        abort(403)
     return "<br>".join(
         f"{rule.endpoint} → {rule.rule}"
         for rule in app.url_map.iter_rules()
@@ -2521,7 +2773,8 @@ def import_page():
     )
 
 
-@app.route("/import/run")
+@app.post("/import/run")
+@admin_required
 def import_run():
     rc, _ = run_import_process(trigger="manual")
     log_audit(
@@ -2540,6 +2793,10 @@ def import_run():
 
 @app.route("/dev", methods=["GET", "POST"])
 def dev_panel():
+    if not is_env_true("TASTERIST_DEV_TOOLS_ENABLED", "0"):
+        abort(404)
+    if not is_owner_user(current_user()):
+        abort(403)
     if request.method == "POST":
         db = get_db()
         db.execute("DELETE FROM tasters")
@@ -2553,4 +2810,4 @@ def dev_panel():
 # ==========================================================
 
 if __name__ == "__main__":
-    app.run(debug=True, port=8501)
+    app.run(debug=is_env_true("TASTERIST_DEBUG", "0"), port=8501)

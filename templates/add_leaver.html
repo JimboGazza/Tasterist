@@ -75,6 +75,7 @@
     </div>
 
     <form method="post">
+      {{ csrf_field() }}
       <input type="hidden" name="programme" value="{{ programme }}">
       <input type="hidden" name="session" id="sessionValueInput">
       <input type="hidden" name="class_day" id="classDayInput">

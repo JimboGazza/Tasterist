@@ -15,6 +15,12 @@
 - Then staff only need the web URL and login.
 - No local Python setup needed for staff.
 
+## Security defaults now in app
+- Public signup is disabled.
+- Only owner account can create/edit/remove accounts in Admin Console.
+- CSRF protection is enabled for all form actions.
+- Login rate limiting is enabled.
+
 ## Can it be on `tasterist.com`?
 Yes.
 - In Render service:

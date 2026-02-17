@@ -20,6 +20,9 @@
 - `TASTERIST_LOGIN_IMPORT_MINUTES=15`
 - `TASTERIST_IMPORT_TIMEOUT_SEC=120`
 - `TASTERIST_CANONICAL_HOST=tasterist.com`
+- `TASTERIST_OWNER_EMAIL=james@penninegymnastics.com`
+- `TASTERIST_OWNER_BOOTSTRAP_PASSWORD=<set a strong one>`
+- `TASTERIST_DEV_TOOLS_ENABLED=0`
 
 ## 4. First boot checks
 1. Open `/health` and confirm JSON `status: ok`.
