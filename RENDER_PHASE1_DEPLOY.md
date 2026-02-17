@@ -44,3 +44,14 @@
 ## 7. Backups
 - Manual backup download (admin): `/cloud/backup`
 - Store downloaded `.db` files in secure cloud storage.
+
+## 8. Custom domain (`tasterist.com`)
+1. In Render service:
+   - `Settings` -> `Custom Domains`
+   - Add `tasterist.com`
+   - Add `www.tasterist.com`
+2. In your DNS provider:
+   - Create DNS records exactly shown by Render for both hostnames.
+3. Optional redirect:
+   - Redirect `www.tasterist.com` -> `tasterist.com` (or opposite, your choice).
+4. Confirm HTTPS cert is active in Render before sharing with staff.
