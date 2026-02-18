@@ -1577,6 +1577,52 @@ def build_week_schedule(programme, week_start):
             """, (programme, day_name)).fetchall()
             source_mode = "weekly"
 
+        # Cloud-safe fallback: if class_sessions are empty, derive a usable weekly
+        # schedule from recent taster data so Add/Leaver screens are never blank.
+        if not rows:
+            weekday_sql = day_date.strftime("%w")
+            recent_cutoff = (today - timedelta(days=210)).isoformat()
+            derived_rows = db.execute("""
+                SELECT
+                    COALESCE(NULLIF(trim(class_name), ''), 'Class') AS class_name,
+                    COALESCE(NULLIF(trim(session), ''), '') AS session,
+                    COALESCE(NULLIF(trim(location), ''), ?) AS location,
+                    COUNT(*) AS seen_count
+                FROM tasters
+                WHERE programme=?
+                  AND strftime('%w', taster_date)=?
+                  AND taster_date>=?
+                GROUP BY class_name, session, location
+                ORDER BY seen_count DESC, session, class_name
+            """, (
+                programme.title(),
+                programme,
+                weekday_sql,
+                recent_cutoff,
+            )).fetchall()
+            projected = []
+            seen_keys = set()
+            for drow in derived_rows:
+                session_raw = (drow["session"] or "").strip()
+                start_time = normalise_session_label(session_raw)
+                if ":" not in start_time:
+                    start_time = _extract_time(session_raw)
+                if not start_time:
+                    continue
+                key = (drow["class_name"], start_time)
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                projected.append({
+                    "class_name": drow["class_name"],
+                    "start_time": start_time,
+                    "end_time": "",
+                    "location": drow["location"] or programme.title(),
+                })
+            if projected:
+                rows = projected
+                source_mode = "derived"
+
         sessions = []
         for row in rows:
             start_time = (row["start_time"] or "")[:5]

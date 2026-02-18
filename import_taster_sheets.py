@@ -622,7 +622,11 @@ def main():
                     print(f"⚠️ 2025 pinned to local archive: {fallback.name}")
                     readable_targets.append((file, fallback, "local-2025"))
                 else:
-                    print(f"⚠️ 2025 archive missing/unreadable locally: {file.name} (skipping)")
+                    if zipfile.is_zipfile(file):
+                        print(f"⚠️ 2025 archive missing locally: using uploaded/source copy for {file.name}")
+                        readable_targets.append((file, file, "primary-2025"))
+                    else:
+                        print(f"⚠️ 2025 archive missing/unreadable locally: {file.name} (skipping)")
                 scheduled_keys.add(file_key)
                 continue
 
