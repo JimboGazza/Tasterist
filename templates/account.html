@@ -4,11 +4,16 @@
 <div class="form-page account-page">
   <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
     <h2 class="text-white mb-0">Account Settings</h2>
-    {% if is_owner_user %}
-    <a href="{{ url_for('account_admin') }}" class="btn btn-glass btn-sm">
-      <i class="bi bi-shield-lock nav-ico"></i> Admin Console
-    </a>
-    {% endif %}
+    <div class="d-flex gap-2">
+      {% if is_owner_user %}
+      <a href="{{ url_for('account_admin') }}" class="btn btn-glass btn-sm">
+        <i class="bi bi-shield-lock nav-ico"></i> Admin Console
+      </a>
+      <a href="{{ url_for('import_page') }}" class="btn btn-green btn-sm">
+        <i class="bi bi-database-up nav-ico"></i> Import Centre
+      </a>
+      {% endif %}
+    </div>
   </div>
 
   <div class="account-grid mb-4">
@@ -81,28 +86,17 @@
       </div>
       <button type="submit" class="btn btn-green">Update Password</button>
     </form>
-
-    <form method="post" class="dashboard-card">
-      {{ csrf_field() }}
-      <input type="hidden" name="action" value="import_now">
-      <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
-        <h5 class="mb-0">Data Import</h5>
-        <div class="d-flex gap-2">
-          <button type="submit" class="btn btn-green btn-sm">Run Import Now</button>
-          <a href="{{ url_for('import_page') }}" class="btn btn-glass btn-sm">View Log</a>
-        </div>
-      </div>
-      {% if last_import %}
-        <div class="dashboard-subtle mb-1">Last run: {{ last_import.run_at }}</div>
-        <div class="dashboard-pills">
-          <span class="dashboard-pill">Files: {{ last_import.files_processed }}</span>
-          <span class="dashboard-pill">Warnings: {{ last_import.warnings|length }}</span>
-          <span class="dashboard-pill">Tasters: {{ last_import.total_tasters if last_import.total_tasters is not none else "—" }}</span>
-        </div>
+    <div class="dashboard-card">
+      <h5 class="mb-2">Import Management</h5>
+      <p class="dashboard-subtle mb-2">Workbook uploads and full imports are managed in Admin Console.</p>
+      {% if is_owner_user %}
+      <a href="{{ url_for('import_page') }}" class="btn btn-glass btn-sm">
+        <i class="bi bi-database-up nav-ico"></i> Open Import Centre
+      </a>
       {% else %}
-        <p class="dashboard-subtle mb-0">No import run logged yet.</p>
+      <p class="dashboard-subtle mb-0">Ask an owner/admin to run imports.</p>
       {% endif %}
-    </form>
+    </div>
   </div>
 </div>
 

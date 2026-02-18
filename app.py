@@ -424,6 +424,7 @@ def _init_db_once():
             cur.execute("DELETE FROM user_admin_days WHERE user_id=?", (row_id,))
             cur.execute("DELETE FROM users WHERE id=?", (row_id,))
 
+    normalise_existing_child_names(db)
     db.commit()
     db.close()
 
@@ -469,6 +470,39 @@ def user_initials(text):
     if len(tokens) == 1:
         return tokens[0][:2].upper()
     return (tokens[0][0] + tokens[1][0]).upper()
+
+
+def normalise_child_name(value):
+    text = re.sub(r"\s+", " ", str(value or "").strip())
+    if not text:
+        return ""
+    words = []
+    for word in text.split(" "):
+        parts = re.split(r"([\-'])", word)
+        rebuilt = []
+        for part in parts:
+            if part in {"-", "'"}:
+                rebuilt.append(part)
+            elif part:
+                rebuilt.append(part[:1].upper() + part[1:].lower())
+        words.append("".join(rebuilt))
+    return " ".join(words)
+
+
+def normalise_existing_child_names(db):
+    changed = 0
+    for table in ("tasters", "leavers"):
+        rows = db.execute(
+            f"SELECT id, child FROM {table} WHERE child IS NOT NULL AND trim(child)<>''"
+        ).fetchall()
+        for row in rows:
+            current = row["child"] if isinstance(row, sqlite3.Row) else row[1]
+            updated = normalise_child_name(current)
+            if updated and updated != current:
+                row_id = row["id"] if isinstance(row, sqlite3.Row) else row[0]
+                db.execute(f"UPDATE {table} SET child=? WHERE id=?", (updated, row_id))
+                changed += 1
+    return changed
 
 
 def is_admin_user(user):
@@ -624,6 +658,9 @@ def enforce_canonical_host():
     if not canonical_host:
         return None
     if request.path == "/health":
+        return None
+    # Safari can fail large file uploads when POST is redirected between hosts.
+    if request.method != "GET":
         return None
     host = request.host.split(":", 1)[0].strip().lower()
     if host in {canonical_host, "localhost", "127.0.0.1"}:
@@ -1952,7 +1989,7 @@ def stats():
 def add_leaver():
     programme = request.args.get("programme", "preschool")
     if request.method == "POST":
-        child = request.form["child"].strip()
+        child = normalise_child_name(request.form["child"])
         programme = request.form.get("programme", programme)
         leave_date = request.form.get("leave_date", "").strip()
         session_label = request.form.get("session", "").strip()
@@ -2634,7 +2671,7 @@ def add():
     db = get_db()
 
     if request.method == "POST":
-        child = request.form["child"].strip()
+        child = normalise_child_name(request.form["child"])
         taster_date = request.form["taster_date"]
         session_label = request.form["session"]
         class_name = request.form.get("class_name", "").strip()
@@ -2822,6 +2859,7 @@ def cloud_backup():
     )
 
 @app.route("/import")
+@admin_required
 def import_page():
     db = get_db()
     db_path = Path(DB_FILE)

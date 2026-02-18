@@ -7,71 +7,87 @@
       <h2 class="text-white mb-1">Admin Console</h2>
       <p class="text-muted mb-0">Manage accounts and review audit logs (owner only).</p>
     </div>
-    <a href="{{ url_for('account_settings') }}" class="btn btn-glass">Back to Settings</a>
+    <div class="d-flex gap-2 flex-wrap">
+      <a href="{{ url_for('import_page') }}" class="btn btn-green btn-sm">
+        <i class="bi bi-database-up nav-ico"></i> Import Centre
+      </a>
+      <a href="{{ url_for('account_settings') }}" class="btn btn-glass btn-sm">Back to Settings</a>
+    </div>
   </div>
 
   <div class="dashboard-card mb-4">
-    <h5 class="mb-2">Create Account</h5>
-    <p class="dashboard-subtle mb-3">Only owner can create staff/admin accounts.</p>
-    <form method="post" class="account-admin-form mb-4">
-      {{ csrf_field() }}
-      <input type="hidden" name="action" value="create_user">
-      <div class="account-admin-fields">
-        <div>
-          <label class="form-label">Full Name</label>
-          <input name="full_name" class="form-control" required>
-        </div>
-        <div>
-          <label class="form-label">Email</label>
-          <input name="username" type="email" class="form-control" required>
-        </div>
-        <div>
-          <label class="form-label">Role</label>
-          <select name="role" class="form-select">
-            <option value="staff" selected>Staff</option>
-            <option value="admin">Admin</option>
-          </select>
-        </div>
-        <div>
-          <label class="form-label">Temporary Password</label>
-          <input name="password" type="password" class="form-control" required>
-        </div>
+    <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+      <div>
+        <h5 class="mb-1">Account Management</h5>
+        <p class="dashboard-subtle mb-0">Edit profile details, role, password, admin-day ownership, or remove accounts.</p>
       </div>
+      <button class="btn btn-green btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#createAccountPanel" aria-expanded="false" aria-controls="createAccountPanel">
+        <i class="bi bi-person-plus nav-ico"></i> Create Account
+      </button>
+    </div>
 
-      <div class="dashboard-label mt-2 mb-2">Admin Day Ownership (Optional)</div>
-      <div class="admin-days-grid mb-3">
-        <div class="admin-days-head"></div>
-        <div class="admin-days-head">Preschool</div>
-        <div class="admin-days-head">Honley</div>
-        <div class="admin-days-head">Lockwood</div>
-        {% for row in grouped_options %}
-          <div class="admin-days-day">{{ row.day_name }}</div>
-          {% for cell in row.cells %}
-            <label class="admin-days-cell admin-days-btn">
-              <input class="admin-days-input" type="checkbox" name="admin_days" value="{{ cell.value }}">
-              <span class="admin-days-hit"></span>
-            </label>
+    <div class="collapse account-create-panel mb-3" id="createAccountPanel">
+      <form method="post" class="account-admin-form">
+        {{ csrf_field() }}
+        <input type="hidden" name="action" value="create_user">
+        <div class="account-admin-fields">
+          <div>
+            <label class="form-label">Full Name</label>
+            <input name="full_name" class="form-control" required>
+          </div>
+          <div>
+            <label class="form-label">Email</label>
+            <input name="username" type="email" class="form-control" required>
+          </div>
+          <div>
+            <label class="form-label">Role</label>
+            <select name="role" class="form-select">
+              <option value="staff" selected>Staff</option>
+              <option value="admin">Admin</option>
+            </select>
+          </div>
+          <div>
+            <label class="form-label">Temporary Password</label>
+            <input name="password" type="password" class="form-control" required>
+          </div>
+        </div>
+
+        <div class="dashboard-label mt-2 mb-2">Admin Day Ownership (Optional)</div>
+        <div class="admin-days-grid mb-3">
+          <div class="admin-days-head"></div>
+          <div class="admin-days-head">Preschool</div>
+          <div class="admin-days-head">Honley</div>
+          <div class="admin-days-head">Lockwood</div>
+          {% for row in grouped_options %}
+            <div class="admin-days-day">{{ row.day_name }}</div>
+            {% for cell in row.cells %}
+              <label class="admin-days-cell admin-days-btn">
+                <input class="admin-days-input" type="checkbox" name="admin_days" value="{{ cell.value }}">
+                <span class="admin-days-hit"></span>
+              </label>
+            {% endfor %}
           {% endfor %}
-        {% endfor %}
-      </div>
+        </div>
 
-      <button type="submit" class="btn btn-green btn-sm">Create Account</button>
-    </form>
+        <button type="submit" class="btn btn-green btn-sm">Create Account</button>
+      </form>
+    </div>
 
-    <h5 class="mb-2">Account Management</h5>
-    <p class="dashboard-subtle mb-3">Edit profile details, role, password, admin-day ownership, or remove accounts.</p>
     <div class="account-admin-users">
       {% for u in users %}
       {% set selected_set = assignment_map.get(u.id, []) %}
-      <details class="account-admin-user" {% if loop.first %}open{% endif %}>
+      <details class="account-admin-user">
         <summary class="account-admin-summary">
           <div>
             <div class="account-admin-name">{{ u.full_name or "Unnamed User" }}</div>
             <div class="dashboard-subtle">{{ u.username }} • Created {{ u.created_at }}</div>
           </div>
-          <span class="account-admin-role {% if u.role == 'admin' %}is-admin{% else %}is-staff{% endif %}">
-            {{ u.role|title }}
-          </span>
+          <div class="d-flex align-items-center gap-2">
+            <span class="account-admin-role {% if u.role == 'admin' %}is-admin{% else %}is-staff{% endif %}">
+              {{ u.role|title }}
+            </span>
+            <i class="bi bi-chevron-down account-admin-chevron"></i>
+          </div>
         </summary>
         <div class="account-admin-body">
           <form method="post" class="account-admin-form">

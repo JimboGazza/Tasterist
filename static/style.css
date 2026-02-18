@@ -819,6 +819,13 @@ code {
   gap: 10px;
 }
 
+.account-create-panel {
+  background: #0d2015;
+  border: 1px solid #214a31;
+  border-radius: 11px;
+  padding: 0.8rem;
+}
+
 .account-admin-user {
   background: #0d2015;
   border: 1px solid #214a31;
@@ -843,6 +850,16 @@ code {
   color: #edfff6;
   font-size: 0.92rem;
   font-weight: 700;
+}
+
+.account-admin-chevron {
+  color: #a7d8be;
+  font-size: 0.78rem;
+  transition: transform 0.15s ease;
+}
+
+.account-admin-user[open] .account-admin-chevron {
+  transform: rotate(180deg);
 }
 
 .account-admin-role {

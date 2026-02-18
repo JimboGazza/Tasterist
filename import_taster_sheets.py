@@ -66,6 +66,24 @@ def normalise_cell_text(v):
         return f"{v.hour:02d}:{v.minute:02d}"
     return str(v).strip()
 
+
+def normalise_child_name(value):
+    text = re.sub(r"\s+", " ", str(value or "").strip())
+    if not text:
+        return ""
+    words = []
+    for word in text.split(" "):
+        parts = re.split(r"([\-'])", word)
+        rebuilt = []
+        for part in parts:
+            if part in {"-", "'"}:
+                rebuilt.append(part)
+            elif part:
+                rebuilt.append(part[:1].upper() + part[1:].lower())
+        words.append("".join(rebuilt))
+    return " ".join(words)
+
+
 def truthy(v):
     if v is None:
         return 0
@@ -346,7 +364,7 @@ def import_excel(path, conn):
                 if not isinstance(name_val, str):
                     continue
 
-                name = name_val.strip()
+                name = normalise_child_name(name_val)
                 if not name or name.lower() == "name" or name.upper() == "LEAVERS":
                     continue
 
@@ -400,7 +418,7 @@ def import_excel(path, conn):
                         if not isinstance(name_val, str):
                             continue
 
-                        name = name_val.strip()
+                        name = normalise_child_name(name_val)
                         if not name or name.lower() == "name" or name.upper() == "LEAVERS":
                             continue
 
