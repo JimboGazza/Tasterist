@@ -1629,6 +1629,13 @@ code {
   margin-top: 0.2rem;
 }
 
+.session-tile-type {
+  color: #f1fff7;
+  font-size: 0.72rem;
+  font-weight: 600;
+  margin-top: 0.26rem;
+}
+
 .session-tile-chip {
   background: rgba(74, 222, 128, 0.18);
   color: #dfffee;

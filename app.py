@@ -871,7 +871,7 @@ def should_run_login_import():
     return datetime.now() - last_run >= timedelta(minutes=min_minutes)
 
 
-def run_import_process(trigger="manual"):
+def run_import_process(trigger="manual", replace=False):
     import_source = get_import_source_folder()
     os.makedirs(import_source, exist_ok=True)
     local_fallback = os.path.join(BASE_DIR, "Taster Sheets")
@@ -886,8 +886,7 @@ def run_import_process(trigger="manual"):
         "--folder", import_source,
         "--db", DB_FILE,
     ]
-    # Never full-refresh on opportunistic login runs.
-    if trigger in {"manual", "account", "upload"}:
+    if replace:
         cmd.append("--apply")
     if os.path.isdir(local_fallback):
         cmd.extend(["--fallback-folder", local_fallback])
@@ -987,6 +986,41 @@ def normalise_session_label(value):
     hour = int(m.group(1))
     minute = m.group(2)
     return f"{hour:02d}:{minute}"
+
+
+def _hhmm_to_minutes(value):
+    s = str(value or "").strip()
+    m = re.match(r"^(\d{1,2}):(\d{2})$", s)
+    if not m:
+        return None
+    return int(m.group(1)) * 60 + int(m.group(2))
+
+
+def infer_class_type(class_name, start_time="", end_time=""):
+    name = str(class_name or "").strip().lower()
+    if "parkour" in name:
+        return "Parkour"
+
+    start_m = _hhmm_to_minutes(start_time)
+    end_m = _hhmm_to_minutes(end_time)
+    if start_m is not None and end_m is not None and end_m > start_m:
+        duration = end_m - start_m
+        if duration == 45:
+            return "45 Minute Gymnastics"
+        if duration == 60:
+            return "1 Hour Gymnastics"
+        if duration == 90:
+            return "1.5 Hour Gymnastics"
+
+    if any(token in name for token in ("1.5", "90 min", "90min", "1h30", "1hr30")):
+        return "1.5 Hour Gymnastics"
+    if any(token in name for token in ("1 hour", "1hr", "60 min", "60min")):
+        return "1 Hour Gymnastics"
+    if any(token in name for token in ("45 min", "45min", "45-minute", "45 minute")):
+        return "45 Minute Gymnastics"
+    if any(token in name for token in ("preschool", "pre-school")):
+        return "Pre-School"
+    return "Gymnastics"
 
 
 def extract_day_name(value):
@@ -1584,7 +1618,8 @@ def build_week_schedule(programme, week_start):
             recent_cutoff = (today - timedelta(days=210)).isoformat()
             derived_rows = db.execute("""
                 SELECT
-                    COALESCE(NULLIF(trim(class_name), ''), 'Class') AS class_name,
+                    NULLIF(trim(class_name), '') AS class_name_raw,
+                    COALESCE(NULLIF(trim(class_name), ''), 'General Class') AS class_name_display,
                     COALESCE(NULLIF(trim(session), ''), '') AS session,
                     COALESCE(NULLIF(trim(location), ''), ?) AS location,
                     COUNT(*) AS seen_count
@@ -1609,12 +1644,13 @@ def build_week_schedule(programme, week_start):
                     start_time = _extract_time(session_raw)
                 if not start_time:
                     continue
-                key = (drow["class_name"], start_time)
+                key = (drow["class_name_display"], start_time)
                 if key in seen_keys:
                     continue
                 seen_keys.add(key)
                 projected.append({
-                    "class_name": drow["class_name"],
+                    "class_name": drow["class_name_display"],
+                    "match_class_name": drow["class_name_raw"],
                     "start_time": start_time,
                     "end_time": "",
                     "location": drow["location"] or programme.title(),
@@ -1625,40 +1661,105 @@ def build_week_schedule(programme, week_start):
 
         sessions = []
         for row in rows:
-            start_time = (row["start_time"] or "")[:5]
-            end_time = (row["end_time"] or "")[:5]
+            start_time = str(row["start_time"] or "")[:5]
+            end_time = str(row["end_time"] or "")[:5]
             time_range = f"{start_time} - {end_time}" if end_time else start_time
             weekday_sql = day_date.strftime("%w")
             session_time = normalise_session_label(start_time)
             session_with_day = f"{day_name} {start_time}".strip()
+            class_name = str(row["class_name"] or "").strip() or "General Class"
+            class_name_match = (
+                str(row["match_class_name"]).strip()
+                if isinstance(row, dict) and row.get("match_class_name") is not None
+                else class_name
+            )
+            if class_name_match.lower() == "general class":
+                class_name_match = ""
+
+            if class_name_match:
+                if session_time:
+                    upcoming_count = db.execute("""
+                        SELECT COUNT(*) AS c
+                        FROM tasters
+                        WHERE programme=?
+                          AND class_name=?
+                          AND (
+                            lower(trim(session)) = lower(?)
+                            OR lower(trim(session)) = lower(?)
+                          )
+                          AND strftime('%w', taster_date)=?
+                          AND taster_date>=?
+                          AND taster_date<=?
+                    """, (
+                        programme,
+                        class_name_match,
+                        session_time,
+                        session_with_day,
+                        weekday_sql,
+                        window_start,
+                        window_end
+                    )).fetchone()["c"]
+                else:
+                    upcoming_count = db.execute("""
+                        SELECT COUNT(*) AS c
+                        FROM tasters
+                        WHERE programme=?
+                          AND class_name=?
+                          AND strftime('%w', taster_date)=?
+                          AND taster_date>=?
+                          AND taster_date<=?
+                    """, (
+                        programme,
+                        class_name_match,
+                        weekday_sql,
+                        window_start,
+                        window_end
+                    )).fetchone()["c"]
+            else:
+                if session_time:
+                    upcoming_count = db.execute("""
+                        SELECT COUNT(*) AS c
+                        FROM tasters
+                        WHERE programme=?
+                          AND (
+                            lower(trim(session)) = lower(?)
+                            OR lower(trim(session)) = lower(?)
+                          )
+                          AND strftime('%w', taster_date)=?
+                          AND taster_date>=?
+                          AND taster_date<=?
+                    """, (
+                        programme,
+                        session_time,
+                        session_with_day,
+                        weekday_sql,
+                        window_start,
+                        window_end
+                    )).fetchone()["c"]
+                else:
+                    upcoming_count = db.execute("""
+                        SELECT COUNT(*) AS c
+                        FROM tasters
+                        WHERE programme=?
+                          AND strftime('%w', taster_date)=?
+                          AND taster_date>=?
+                          AND taster_date<=?
+                    """, (
+                        programme,
+                        weekday_sql,
+                        window_start,
+                        window_end
+                    )).fetchone()["c"]
+
             sessions.append({
                 "session_value": f"{day_name} {start_time}",
-                "class_name": row["class_name"],
+                "class_name": class_name,
+                "class_type": infer_class_type(class_name, start_time, end_time),
                 "time_range": time_range,
                 "start_time": start_time,
                 "end_time": end_time,
                 "location": row["location"],
-                "upcoming_count": db.execute("""
-                    SELECT COUNT(*) AS c
-                    FROM tasters
-                    WHERE programme=?
-                      AND class_name=?
-                      AND (
-                        lower(trim(session)) = lower(?)
-                        OR lower(trim(session)) = lower(?)
-                      )
-                      AND strftime('%w', taster_date)=?
-                      AND taster_date>=?
-                      AND taster_date<=?
-                """, (
-                    programme,
-                    row["class_name"],
-                    session_time,
-                    session_with_day,
-                    weekday_sql,
-                    window_start,
-                    window_end
-                )).fetchone()["c"],
+                "upcoming_count": int(upcoming_count or 0),
             })
 
         week_days.append({
@@ -2979,12 +3080,13 @@ def import_upload():
         flash(f"Skipped {skipped} file(s) (invalid or empty filename).", "warning")
 
     if request.form.get("run_after_upload") == "1":
-        rc, _ = run_import_process(trigger="upload")
+        replace = request.form.get("replace_all") == "1"
+        rc, _ = run_import_process(trigger="upload", replace=replace)
         log_audit(
             "run_import",
             entity_type="system",
             entity_id="upload",
-            details=f"Import trigger=upload rc={rc}",
+            details=f"Import trigger=upload replace={1 if replace else 0} rc={rc}",
             status="ok" if rc == 0 else "warn",
         )
         if rc == 0:
@@ -3002,12 +3104,13 @@ def import_run():
         flash("Use the Run Full Import button on the Import page.", "warning")
         return redirect(url_for("import_page"))
 
-    rc, _ = run_import_process(trigger="manual")
+    replace = request.form.get("replace_all") == "1"
+    rc, _ = run_import_process(trigger="manual", replace=replace)
     log_audit(
         "run_import",
         entity_type="system",
         entity_id="manual",
-        details=f"Import trigger=manual rc={rc}",
+        details=f"Import trigger=manual replace={1 if replace else 0} rc={rc}",
         status="ok" if rc == 0 else "warn",
     )
     if rc == 0:
