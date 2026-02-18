@@ -847,6 +847,7 @@ def run_import_process(trigger="manual"):
         sys.executable,
         "import_taster_sheets.py",
         "--folder", import_source,
+        "--db", DB_FILE,
         "--apply"
     ]
     if os.path.isdir(local_fallback):

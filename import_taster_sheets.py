@@ -496,6 +496,42 @@ def main():
     args = p.parse_args()
 
     conn = sqlite3.connect(args.db)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS tasters (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            child TEXT,
+            programme TEXT,
+            location TEXT,
+            session TEXT,
+            class_name TEXT DEFAULT '',
+            taster_date DATE,
+            notes TEXT,
+            attended INTEGER DEFAULT 0,
+            club_fees INTEGER DEFAULT 0,
+            bg INTEGER DEFAULT 0,
+            badge INTEGER DEFAULT 0,
+            reschedule_contacted INTEGER DEFAULT 0
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS leavers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            child TEXT NOT NULL,
+            programme TEXT NOT NULL,
+            leave_month TEXT NOT NULL,
+            leave_date TEXT DEFAULT '',
+            class_day TEXT DEFAULT '',
+            session TEXT DEFAULT '',
+            class_name TEXT DEFAULT '',
+            removed_la INTEGER DEFAULT 0,
+            removed_bg INTEGER DEFAULT 0,
+            added_to_board INTEGER DEFAULT 0,
+            reason TEXT DEFAULT '',
+            email TEXT DEFAULT '',
+            source TEXT DEFAULT 'import'
+        )
+    """)
+    conn.commit()
     taster_cols = {r[1] for r in conn.execute("PRAGMA table_info(tasters)")}
     migrated = False
     if "class_name" not in taster_cols:
