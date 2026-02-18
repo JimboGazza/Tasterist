@@ -6,7 +6,15 @@
       <h2 class="text-white mb-1">Find Taster</h2>
       <p class="text-white mb-0">Search and filter all records in one list.</p>
     </div>
-    <a href="{{ url_for('dashboard') }}" class="btn btn-glass">Back to Dashboard</a>
+    <div class="d-flex gap-2 flex-wrap">
+      {% if is_owner_user %}
+      <form method="post" action="{{ url_for('admin_fix_pm_times') }}">
+        {{ csrf_field() }}
+        <button type="submit" class="btn btn-green">Fix PM Times</button>
+      </form>
+      {% endif %}
+      <a href="{{ url_for('dashboard') }}" class="btn btn-glass">Back to Dashboard</a>
+    </div>
   </div>
 
   <div class="find-layout">
@@ -44,6 +52,12 @@
         <div class="filter-check"><input id="bdYes" type="checkbox" name="f_badge" value="yes" checked><label for="bdYes">Yes</label></div>
         <div class="filter-check"><input id="bdNo" type="checkbox" name="f_badge" value="no" checked><label for="bdNo">No</label></div>
       </div>
+
+      <div class="filter-group">
+        <div class="filter-title">Unknown Class / Day</div>
+        <div class="filter-check"><input id="uKnown" type="checkbox" name="f_unknown" value="no" checked><label for="uKnown">Known</label></div>
+        <div class="filter-check"><input id="uUnknown" type="checkbox" name="f_unknown" value="yes" checked><label for="uUnknown">Unknown / Alien</label></div>
+      </div>
     </aside>
 
     <section class="find-results">
@@ -76,7 +90,8 @@
                 data-attended="{{ 'yes' if t.attended else 'no' }}"
                 data-bg="{{ 'yes' if t.bg else 'no' }}"
                 data-badge="{{ 'yes' if t.badge else 'no' }}"
-                data-search="{{ (t.child ~ ' ' ~ t.programme ~ ' ' ~ (t.class_name or '') ~ ' ' ~ t.session ~ ' ' ~ t.taster_date ~ ' ' ~ (t.notes or ''))|lower }}">
+                data-unknown="{{ 'yes' if t.unknown_class else 'no' }}"
+                data-search="{{ (t.child ~ ' ' ~ t.programme ~ ' ' ~ (t.class_name or '') ~ ' ' ~ t.session ~ ' ' ~ t.taster_date ~ ' ' ~ (t.notes or '') ~ ' ' ~ (t.diagnostic_text or '') ~ ' ' ~ (t.location or ''))|lower }}">
                 <td><span class="table-flag is-yes">Taster</span></td>
                 <td>{{ t.child }}</td>
                 <td>{{ t.programme|title }}</td>
@@ -86,7 +101,13 @@
                 <td><span class="table-flag {% if t.attended %}is-yes{% else %}is-no{% endif %}">{{ "Yes" if t.attended else "No" }}</span></td>
                 <td><span class="table-flag {% if t.bg %}is-yes{% else %}is-no{% endif %}">{{ "Yes" if t.bg else "No" }}</span></td>
                 <td><span class="table-flag {% if t.badge %}is-yes{% else %}is-no{% endif %}">{{ "Yes" if t.badge else "No" }}</span></td>
-                <td>{{ t.notes }}</td>
+                <td>
+                  <div>{{ t.notes or "—" }}</div>
+                  <div class="dashboard-subtle">Location: {{ t.location or "—" }}</div>
+                  {% if t.unknown_class %}
+                  <div class="dashboard-subtle text-warning">{{ t.diagnostic_text or "Unknown class/day details" }}</div>
+                  {% endif %}
+                </td>
               </tr>
               {% endfor %}
               {% for l in leavers %}
@@ -96,7 +117,8 @@
                 data-attended="na"
                 data-bg="na"
                 data-badge="na"
-                data-search="{{ (l.child ~ ' ' ~ l.programme ~ ' ' ~ (l.class_name or '') ~ ' ' ~ (l.session or '') ~ ' ' ~ (l.leave_date or '') ~ ' ' ~ (l.email or '') ~ ' ' ~ (l.source or ''))|lower }}">
+                data-unknown="{{ 'yes' if l.unknown_class else 'no' }}"
+                data-search="{{ (l.child ~ ' ' ~ l.programme ~ ' ' ~ (l.class_name or '') ~ ' ' ~ (l.class_day or '') ~ ' ' ~ (l.session or '') ~ ' ' ~ (l.leave_date or '') ~ ' ' ~ (l.email or '') ~ ' ' ~ (l.source or '') ~ ' ' ~ (l.diagnostic_text or ''))|lower }}">
                 <td><span class="table-flag is-no">Leaver</span></td>
                 <td>{{ l.child }}</td>
                 <td>{{ l.programme|title }}</td>
@@ -106,7 +128,14 @@
                 <td>—</td>
                 <td>—</td>
                 <td>—</td>
-                <td>{{ l.source or "manual" }}</td>
+                <td>
+                  <div>Source: {{ l.source or "manual" }}</div>
+                  <div class="dashboard-subtle">Class Day: {{ l.class_day or l.resolved_day }}</div>
+                  <div class="dashboard-subtle">Email: {{ l.email or "—" }}</div>
+                  {% if l.unknown_class %}
+                  <div class="dashboard-subtle text-warning">{{ l.diagnostic_text or "Unknown class/day details" }}</div>
+                  {% endif %}
+                </td>
               </tr>
               {% endfor %}
             </tbody>
@@ -134,6 +163,7 @@ function applyFilters() {
   const attended = selected("f_attended");
   const bg = selected("f_bg");
   const badge = selected("f_badge");
+  const unknown = selected("f_unknown");
 
   let shown = 0;
   rows.forEach((row) => {
@@ -143,6 +173,10 @@ function applyFilters() {
       return;
     }
     if (!programmes.includes(row.dataset.programme)) {
+      row.classList.add("d-none");
+      return;
+    }
+    if (!unknown.includes(row.dataset.unknown || "no")) {
       row.classList.add("d-none");
       return;
     }

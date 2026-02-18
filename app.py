@@ -1558,6 +1558,193 @@ def normalise_session_label(value):
     return f"{hour:02d}:{minute:02d}"
 
 
+def parse_hhmm_like(value):
+    text = str(value or "").strip()
+    match = re.match(r"^([01]?\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?$", text)
+    if not match:
+        return None
+    hour = int(match.group(1))
+    minute = int(match.group(2))
+    second = int(match.group(3)) if match.group(3) is not None else None
+    return hour, minute, second
+
+
+def shift_time_value_to_pm(value):
+    parsed = parse_hhmm_like(value)
+    if not parsed:
+        return None
+    hour, minute, second = parsed
+    if hour <= 0 or hour >= 12:
+        return None
+    pm_hour = hour + 12
+    if second is None:
+        return f"{pm_hour:02d}:{minute:02d}"
+    return f"{pm_hour:02d}:{minute:02d}:{second:02d}"
+
+
+def run_pm_time_fix(force=False, include_preschool=False):
+    conn = sqlite3.connect(DB_FILE, timeout=max(5, SQLITE_BUSY_TIMEOUT_MS // 1000))
+    conn.row_factory = sqlite3.Row
+    conn.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
+    cur = conn.cursor()
+
+    # Skip repeated auto-fix passes once an auto run has already been recorded.
+    if not force:
+        existing = cur.execute(
+            "SELECT COUNT(*) FROM audit_logs WHERE action='auto_fix_pm_times'"
+        ).fetchone()[0]
+        if int(existing or 0) > 0:
+            conn.close()
+            return {
+                "applied": False,
+                "reason": "already_ran",
+                "suspicious": False,
+                "morning_non_preschool": 0,
+                "pm_non_preschool": 0,
+                "tasters_updated": 0,
+                "leavers_updated": 0,
+                "class_start_updated": 0,
+                "class_end_updated": 0,
+            }
+
+    profile_rows = cur.execute(
+        """
+        SELECT programme, session
+        FROM tasters
+        WHERE trim(COALESCE(session, ''))<>''
+        """
+    ).fetchall()
+    morning_non_preschool = 0
+    pm_non_preschool = 0
+    for row in profile_rows:
+        programme = str(row["programme"] or "").strip().lower()
+        parsed = parse_hhmm_like(row["session"])
+        if not parsed or programme == "preschool":
+            continue
+        hour = parsed[0]
+        if 1 <= hour <= 11:
+            morning_non_preschool += 1
+        elif hour >= 12:
+            pm_non_preschool += 1
+
+    suspicious = (
+        morning_non_preschool >= 60
+        and pm_non_preschool <= max(4, morning_non_preschool // 25)
+    )
+    if not force and not suspicious:
+        conn.close()
+        return {
+            "applied": False,
+            "reason": "not_suspicious",
+            "suspicious": False,
+            "morning_non_preschool": morning_non_preschool,
+            "pm_non_preschool": pm_non_preschool,
+            "tasters_updated": 0,
+            "leavers_updated": 0,
+            "class_start_updated": 0,
+            "class_end_updated": 0,
+        }
+
+    def can_update_programme(programme):
+        if include_preschool:
+            return True
+        return str(programme or "").strip().lower() != "preschool"
+
+    tasters_updated = 0
+    leavers_updated = 0
+    class_start_updated = 0
+    class_end_updated = 0
+
+    taster_rows = cur.execute("SELECT id, programme, session FROM tasters").fetchall()
+    for row in taster_rows:
+        if not can_update_programme(row["programme"]):
+            continue
+        shifted = shift_time_value_to_pm(row["session"])
+        if shifted and shifted != (row["session"] or ""):
+            cur.execute("UPDATE tasters SET session=? WHERE id=?", (shifted, row["id"]))
+            tasters_updated += 1
+
+    leaver_rows = cur.execute("SELECT id, programme, session FROM leavers").fetchall()
+    for row in leaver_rows:
+        if not can_update_programme(row["programme"]):
+            continue
+        shifted = shift_time_value_to_pm(row["session"])
+        if shifted and shifted != (row["session"] or ""):
+            cur.execute("UPDATE leavers SET session=? WHERE id=?", (shifted, row["id"]))
+            leavers_updated += 1
+
+    class_rows = cur.execute(
+        "SELECT id, programme, start_time, end_time FROM class_sessions"
+    ).fetchall()
+    for row in class_rows:
+        if not can_update_programme(row["programme"]):
+            continue
+        shifted_start = shift_time_value_to_pm(row["start_time"])
+        shifted_end = shift_time_value_to_pm(row["end_time"])
+        update_start = shifted_start and shifted_start != (row["start_time"] or "")
+        update_end = shifted_end and shifted_end != (row["end_time"] or "")
+        if not update_start and not update_end:
+            continue
+        cur.execute(
+            "UPDATE class_sessions SET start_time=?, end_time=? WHERE id=?",
+            (
+                shifted_start if update_start else row["start_time"],
+                shifted_end if update_end else row["end_time"],
+                row["id"],
+            ),
+        )
+        if update_start:
+            class_start_updated += 1
+        if update_end:
+            class_end_updated += 1
+
+    total_updates = tasters_updated + leavers_updated + class_start_updated + class_end_updated
+    if total_updates > 0:
+        action = "manual_fix_pm_times" if force else "auto_fix_pm_times"
+        details = (
+            f"include_preschool={1 if include_preschool else 0} | "
+            f"morning_non_preschool={morning_non_preschool} | "
+            f"pm_non_preschool={pm_non_preschool} | "
+            f"tasters={tasters_updated} | leavers={leavers_updated} | "
+            f"class_start={class_start_updated} | class_end={class_end_updated}"
+        )
+        cur.execute(
+            """
+            INSERT INTO audit_logs (created_at, username, action, entity_type, entity_id, status, details)
+            VALUES (?, 'system', ?, 'system', 'time-fix', 'ok', ?)
+            """,
+            (datetime.now().isoformat(timespec="seconds"), action, details),
+        )
+    conn.commit()
+    conn.close()
+    return {
+        "applied": total_updates > 0,
+        "reason": "updated" if total_updates > 0 else "nothing_to_update",
+        "suspicious": suspicious,
+        "morning_non_preschool": morning_non_preschool,
+        "pm_non_preschool": pm_non_preschool,
+        "tasters_updated": tasters_updated,
+        "leavers_updated": leavers_updated,
+        "class_start_updated": class_start_updated,
+        "class_end_updated": class_end_updated,
+    }
+
+
+def maybe_auto_fix_pm_times():
+    if not is_env_true("TASTERIST_AUTO_FIX_PM_TIMES", "1"):
+        return
+    try:
+        result = run_pm_time_fix(force=False, include_preschool=False)
+        if result.get("applied"):
+            print(
+                "⏰ Auto PM-time fix applied: "
+                f"tasters={result['tasters_updated']}, leavers={result['leavers_updated']}, "
+                f"class_start={result['class_start_updated']}, class_end={result['class_end_updated']}"
+            )
+    except Exception as exc:
+        print(f"⚠️ Auto PM-time fix failed: {exc}")
+
+
 def _hhmm_to_minutes(value):
     s = str(value or "").strip()
     m = re.match(r"^(\d{1,2}):(\d{2})$", s)
@@ -3459,20 +3646,134 @@ def cron_weekly_admin_report():
     }
 
 
+@app.route("/admin/fix-pm-times", methods=["POST"])
+@owner_required
+def admin_fix_pm_times():
+    include_preschool = request.form.get("include_preschool") == "1"
+    force = request.form.get("force") == "1"
+    try:
+        result = run_pm_time_fix(force=force, include_preschool=include_preschool)
+    except Exception as exc:
+        flash(f"PM time fix failed: {exc}", "danger")
+        return redirect(request.referrer or url_for("all_tasters"))
+
+    log_audit(
+        "manual_fix_pm_times_request",
+        entity_type="system",
+        entity_id="time-fix",
+        details=(
+            f"include_preschool={1 if include_preschool else 0} | "
+            f"force={1 if force else 0} | "
+            f"applied={1 if result.get('applied') else 0} | "
+            f"tasters={result.get('tasters_updated', 0)} | "
+            f"leavers={result.get('leavers_updated', 0)} | "
+            f"class_start={result.get('class_start_updated', 0)} | "
+            f"class_end={result.get('class_end_updated', 0)}"
+        ),
+    )
+    if result.get("applied"):
+        flash(
+            "PM time fix applied: "
+            f"tasters {result['tasters_updated']}, leavers {result['leavers_updated']}, "
+            f"class start {result['class_start_updated']}, class end {result['class_end_updated']}.",
+            "success",
+        )
+    else:
+        flash("No PM time updates were required.", "warning")
+    return redirect(request.referrer or url_for("all_tasters"))
+
+
 @app.route("/tasters")
 def all_tasters():
-    tasters = query("""
+    def has_alien_text(value):
+        text = str(value or "").strip()
+        if not text:
+            return False
+        return bool(re.search(r"[^A-Za-z0-9\s\-\&\(\)\/\.,:'\"]", text))
+
+    tasters_raw = query("""
         SELECT
             id, child, programme, location, session, class_name,
             taster_date, attended, bg, badge, notes
         FROM tasters
         ORDER BY taster_date DESC, child
     """)
-    leavers = query("""
-        SELECT child, programme, leave_month, leave_date, session, class_name, email, source
+    tasters = []
+    for row in tasters_raw:
+        item = dict(row)
+        class_name = str(item.get("class_name") or "").strip()
+        session_text = str(item.get("session") or "").strip()
+        notes_text = str(item.get("notes") or "").strip()
+
+        issues = []
+        unknown_class = False
+        if not class_name or class_name in {"?", "Unknown", "unknown"}:
+            unknown_class = True
+            issues.append("Unknown class label")
+        if "?" in class_name:
+            unknown_class = True
+            issues.append(f"Alien class marker: {class_name}")
+        if session_text and not re.search(r"\b\d{1,2}:\d{2}(?::\d{2})?\b", session_text):
+            issues.append(f"Alien session text: {session_text}")
+        if has_alien_text(class_name):
+            issues.append(f"Alien class text: {class_name}")
+        if has_alien_text(session_text):
+            issues.append(f"Alien session chars: {session_text}")
+        if has_alien_text(notes_text):
+            issues.append(f"Alien notes chars: {notes_text}")
+
+        if issues:
+            unknown_class = True
+        item["unknown_class"] = 1 if unknown_class else 0
+        item["diagnostic_text"] = " | ".join(issues)
+        tasters.append(item)
+
+    leavers_raw = query("""
+        SELECT child, programme, leave_month, leave_date, class_day, session, class_name, email, source
         FROM leavers
         ORDER BY leave_month DESC, leave_date DESC, child
     """)
+    leavers = []
+    for row in leavers_raw:
+        item = dict(row)
+        class_name = str(item.get("class_name") or "").strip()
+        class_day = str(item.get("class_day") or "").strip()
+        session_text = str(item.get("session") or "").strip()
+        source_text = str(item.get("source") or "").strip()
+        email_text = str(item.get("email") or "").strip()
+        inferred_day = extract_day_name(class_day) or extract_day_name(session_text)
+
+        issues = []
+        unknown_class = False
+        if not class_name or class_name in {"?", "Unknown", "unknown"}:
+            unknown_class = True
+            issues.append("Unknown class label")
+        if not inferred_day:
+            unknown_class = True
+            if class_day:
+                issues.append(f"Unknown class day: {class_day}")
+            else:
+                issues.append("Unknown class day")
+        if class_day and not extract_day_name(class_day):
+            issues.append(f"Alien class day text: {class_day}")
+        if session_text and not re.search(r"\b\d{1,2}:\d{2}(?::\d{2})?\b", session_text):
+            issues.append(f"Alien session text: {session_text}")
+        if has_alien_text(class_name):
+            issues.append(f"Alien class text: {class_name}")
+        if has_alien_text(class_day):
+            issues.append(f"Alien class-day chars: {class_day}")
+        if has_alien_text(session_text):
+            issues.append(f"Alien session chars: {session_text}")
+        if has_alien_text(source_text):
+            issues.append(f"Alien source chars: {source_text}")
+        if has_alien_text(email_text):
+            issues.append(f"Alien email chars: {email_text}")
+
+        item["unknown_class"] = 1 if unknown_class else 0
+        item["diagnostic_text"] = " | ".join(issues)
+        item["resolved_day"] = inferred_day or "?"
+        leavers.append(item)
+
     return render_template("all_tasters.html", tasters=tasters, leavers=leavers)
 
 # ==========================================================
@@ -3903,6 +4204,7 @@ def dev_panel():
 
 init_db()
 maybe_restore_sqlite_from_postgres()
+maybe_auto_fix_pm_times()
 
 try:
     _boot_db = sqlite3.connect(DB_FILE)
