@@ -35,7 +35,7 @@
     <div class="import-card-body">
       <h5 class="mb-2">Upload Workbook Updates</h5>
       <p class="text-muted small mb-3">
-        Upload latest `.xlsx` files here. They are stored on the server and used for manual imports.
+        Upload local `.xlsx` copies here. If files are still cloud placeholders (OneDrive not fully downloaded), Safari may fail the upload.
       </p>
       {% if is_admin_user %}
       <form method="post" action="{{ url_for('import_upload') }}" enctype="multipart/form-data">
@@ -57,7 +57,9 @@
     <div class="import-card-body">
       <h5 class="mb-2">Run Full Import</h5>
       <p class="text-muted small mb-3">
-        Reads all supported `.xlsx` files from this folder and refreshes tasters/leavers in the internal DB.
+        Reads supported `.xlsx` files and refreshes tasters/leavers in the internal DB.
+        <br>
+        <strong>Policy:</strong> 2025 always uses local archived copies; 2026+ uses OneDrive files first with fallback.
       </p>
       <p class="small mb-3">
         <code>{{ import_source }}</code>

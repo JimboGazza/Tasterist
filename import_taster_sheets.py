@@ -48,6 +48,21 @@ def is_supported_workbook(fname):
     f = fname.lower()
     return "taster" in f and "leaver" in f
 
+
+def workbook_key(name):
+    return re.sub(r"[^a-z0-9]+", "", Path(name).name.lower())
+
+
+def detect_workbook_year(path):
+    m = re.search(r"(20\d{2})", path.name)
+    if m:
+        return int(m.group(1))
+    for part in reversed(path.parts):
+        if re.fullmatch(r"20\d{2}", part):
+            return int(part)
+    return None
+
+
 def normalise_time(v):
     if v is None:
         return None
@@ -585,7 +600,7 @@ def main():
                     continue
                 if is_supported_workbook(fb.name):
                     fallback_candidates.append(fb)
-                fallback_lookup.setdefault(fb.name.lower(), fb)
+                fallback_lookup.setdefault(workbook_key(fb.name), fb)
 
     if not candidate_files and fallback_candidates:
         print("ℹ️ No supported files in primary folder; using local fallback folder files.")
@@ -595,20 +610,52 @@ def main():
         raise SystemExit(f"❌ No supported workbook files found in: {root}")
 
     readable_targets = []
+    scheduled_keys = set()
     for file in candidate_files:
         import_path = file
+        file_key = workbook_key(file.name)
+        fallback = fallback_lookup.get(file_key)
+        workbook_year = detect_workbook_year(file)
         try:
-            if not zipfile.is_zipfile(file):
-                fallback = fallback_lookup.get(file.name.lower())
+            if workbook_year == 2025:
                 if fallback and zipfile.is_zipfile(fallback):
-                    readable_targets.append((file, fallback, True))
+                    print(f"⚠️ 2025 pinned to local archive: {fallback.name}")
+                    readable_targets.append((file, fallback, "local-2025"))
                 else:
-                    print(f"⚠️ SKIP (invalid or not fully downloaded .xlsx): {file}")
+                    print(f"⚠️ 2025 archive missing/unreadable locally: {file.name} (skipping)")
+                scheduled_keys.add(file_key)
+                continue
+
+            if not zipfile.is_zipfile(file):
+                if fallback and zipfile.is_zipfile(fallback):
+                    print(f"⚠️ Primary unreadable, using local fallback: {file.name}")
+                    readable_targets.append((file, fallback, "fallback"))
+                else:
+                    print(f"⚠️ SKIP (invalid/not downloaded). Save local copy first: {file}")
             else:
-                readable_targets.append((file, import_path, False))
+                readable_targets.append((file, import_path, "primary"))
+            scheduled_keys.add(file_key)
         except (TimeoutError, OSError, zipfile.BadZipFile) as exc:
             print(f"⚠️ SKIP (unreadable workbook): {file}")
+            scheduled_keys.add(file_key)
             continue
+
+    # Ensure 2025 imports always happen from local archive, even if cloud folder lacks those files.
+    for fb in fallback_candidates:
+        if detect_workbook_year(fb) != 2025:
+            continue
+        key = workbook_key(fb.name)
+        if key in scheduled_keys:
+            continue
+        try:
+            if zipfile.is_zipfile(fb):
+                print(f"⚠️ 2025 missing in primary folder, using local archive: {fb.name}")
+                readable_targets.append((fb, fb, "local-2025"))
+                scheduled_keys.add(key)
+            else:
+                print(f"⚠️ 2025 local archive invalid/unreadable: {fb}")
+        except (TimeoutError, OSError, zipfile.BadZipFile):
+            print(f"⚠️ 2025 local archive unreadable: {fb}")
 
     if not readable_targets:
         raise SystemExit("❌ No readable workbook files found; import aborted without clearing data.")
@@ -620,9 +667,9 @@ def main():
         conn.commit()
 
     total_t = total_l = 0
-    for file, import_path, used_fallback in readable_targets:
+    for file, import_path, source_mode in readable_targets:
         try:
-            if used_fallback:
+            if source_mode in {"fallback", "local-2025"}:
                 print(f"ℹ️ Using local fallback: {file.name}")
             t, l = import_excel(import_path, conn)
             total_t += t
