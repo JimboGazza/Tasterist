@@ -2851,9 +2851,13 @@ def import_page():
     )
 
 
-@app.post("/import/upload")
+@app.route("/import/upload", methods=["GET", "POST"])
 @admin_required
 def import_upload():
+    if request.method == "GET":
+        flash("Use the upload form on the Import page.", "warning")
+        return redirect(url_for("import_page"))
+
     files = request.files.getlist("workbooks")
     if not files:
         flash("No files selected.", "warning")
@@ -2905,9 +2909,13 @@ def import_upload():
     return redirect(url_for("import_page"))
 
 
-@app.post("/import/run")
+@app.route("/import/run", methods=["GET", "POST"])
 @admin_required
 def import_run():
+    if request.method == "GET":
+        flash("Use the Run Full Import button on the Import page.", "warning")
+        return redirect(url_for("import_page"))
+
     rc, _ = run_import_process(trigger="manual")
     log_audit(
         "run_import",
