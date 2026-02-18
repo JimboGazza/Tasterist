@@ -5,15 +5,59 @@
   <div class="import-header mb-4">
     <h1 class="text-white mb-1">Data Import</h1>
     <p class="text-muted mb-0">
-      Run the workbook importer and review the latest result in a cleaner log view.
+      Internal DB is primary. Upload workbook updates, then run import when needed.
     </p>
   </div>
 
   <div class="import-card mb-4">
     <div class="import-card-body">
-      <h5 class="mb-2">Run Importer</h5>
+      <h5 class="mb-2">Storage Status</h5>
+      <div class="import-meta">
+        <span class="import-meta-item">DB File: <strong>{{ storage_stats.db_file }}</strong></span>
+        <span class="import-meta-item">DB Exists: <strong>{{ "Yes" if storage_stats.db_exists else "No" }}</strong></span>
+        <span class="import-meta-item">Accounts: <strong>{{ storage_stats.user_count }}</strong></span>
+        <span class="import-meta-item">Tasters: <strong>{{ storage_stats.taster_count }}</strong></span>
+        <span class="import-meta-item">Leavers: <strong>{{ storage_stats.leaver_count }}</strong></span>
+      </div>
+      <div class="import-meta mt-2">
+        <span class="import-meta-item">Import Folder: <strong>{{ storage_stats.import_source }}</strong></span>
+        <span class="import-meta-item">Folder Exists: <strong>{{ "Yes" if storage_stats.import_source_exists else "No" }}</strong></span>
+        <span class="import-meta-item">Workbook Files: <strong>{{ storage_stats.xlsx_count }}</strong></span>
+      </div>
+      <div class="mt-3 d-flex gap-2 flex-wrap">
+        <a href="{{ url_for('all_tasters') }}" class="btn btn-glass btn-sm">Edit DB (Find Taster)</a>
+        <a href="{{ url_for('admin_tasks') }}" class="btn btn-glass btn-sm">Admin Tasks</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="import-card mb-4">
+    <div class="import-card-body">
+      <h5 class="mb-2">Upload Workbook Updates</h5>
       <p class="text-muted small mb-3">
-        Reads all supported `.xlsx` files from this source folder, then refreshes tasters/leavers data.
+        Upload latest `.xlsx` files here. They are stored on the server and used for manual imports.
+      </p>
+      {% if is_admin_user %}
+      <form method="post" action="{{ url_for('import_upload') }}" enctype="multipart/form-data">
+        {{ csrf_field() }}
+        <input type="file" name="workbooks" class="form-control mb-3" accept=".xlsx" multiple required>
+        <label class="form-check mb-3">
+          <input class="form-check-input" type="checkbox" name="run_after_upload" value="1" checked>
+          <span class="form-check-label">Run full import after upload</span>
+        </label>
+        <button type="submit" class="btn btn-green w-100">Upload Workbook Files</button>
+      </form>
+      {% else %}
+      <div class="alert alert-dark mb-0">Only admin-level accounts can upload/import workbooks.</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="import-card mb-4">
+    <div class="import-card-body">
+      <h5 class="mb-2">Run Full Import</h5>
+      <p class="text-muted small mb-3">
+        Reads all supported `.xlsx` files from this folder and refreshes tasters/leavers in the internal DB.
       </p>
       <p class="small mb-3">
         <code>{{ import_source }}</code>

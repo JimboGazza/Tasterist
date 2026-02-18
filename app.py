@@ -22,6 +22,7 @@ from flask import (
     redirect, url_for, flash, session, send_file, abort
 )
 from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.utils import secure_filename
 from markupsafe import Markup
 
 import pandas as pd
@@ -35,7 +36,12 @@ app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("TASTERIST_SECRET_KEY", "tasterist-dev-key")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_FILE = os.environ.get("TASTERIST_DB_FILE", os.path.join(BASE_DIR, "tasterist.db"))
+DEFAULT_DB_FILE = (
+    "/var/data/tasterist.db"
+    if (os.environ.get("RENDER") or os.environ.get("TASTERIST_CANONICAL_HOST"))
+    else os.path.join(BASE_DIR, "tasterist.db")
+)
+DB_FILE = os.environ.get("TASTERIST_DB_FILE", DEFAULT_DB_FILE)
 IMPORT_LOG_FILE = os.path.join(BASE_DIR, "import_previews", "last_import.log")
 IMPORT_META_FILE = os.path.join(BASE_DIR, "import_previews", "last_import_meta.json")
 DAY_ORDER = {
@@ -91,6 +97,7 @@ app.config.update(
     SESSION_COOKIE_SAMESITE="Lax",
     SESSION_COOKIE_SECURE=_running_in_prod(),
     PERMANENT_SESSION_LIFETIME=timedelta(hours=12),
+    MAX_CONTENT_LENGTH=100 * 1024 * 1024,
 )
 
 
@@ -132,6 +139,7 @@ def get_import_source_folder():
 
 def get_db():
     if "_db" not in g:
+        os.makedirs(os.path.dirname(DB_FILE), exist_ok=True)
         g._db = sqlite3.connect(DB_FILE, timeout=max(5, SQLITE_BUSY_TIMEOUT_MS // 1000))
         g._db.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
         g._db.row_factory = sqlite3.Row
@@ -162,6 +170,7 @@ def apply_security_headers(response):
 
 
 def _init_db_once():
+    os.makedirs(os.path.dirname(DB_FILE), exist_ok=True)
     db = sqlite3.connect(DB_FILE, timeout=max(5, SQLITE_BUSY_TIMEOUT_MS // 1000))
     cur = db.cursor()
     cur.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
@@ -827,6 +836,7 @@ def should_run_login_import():
 
 def run_import_process(trigger="manual"):
     import_source = get_import_source_folder()
+    os.makedirs(import_source, exist_ok=True)
     local_fallback = os.path.join(BASE_DIR, "Taster Sheets")
     timeout_raw = os.environ.get("TASTERIST_IMPORT_TIMEOUT_SEC", "120").strip()
     try:
@@ -2812,11 +2822,86 @@ def cloud_backup():
 
 @app.route("/import")
 def import_page():
+    db = get_db()
+    db_path = Path(DB_FILE)
+    import_source = get_import_source_folder()
+    import_root = Path(import_source).expanduser()
+    xlsx_count = 0
+    if import_root.exists():
+        xlsx_count = len([
+            f for f in import_root.rglob("*.xlsx")
+            if not f.name.startswith("~$")
+        ])
+    stats = {
+        "user_count": db.execute("SELECT COUNT(*) c FROM users").fetchone()["c"],
+        "taster_count": db.execute("SELECT COUNT(*) c FROM tasters").fetchone()["c"],
+        "leaver_count": db.execute("SELECT COUNT(*) c FROM leavers").fetchone()["c"],
+        "db_file": str(db_path),
+        "db_exists": db_path.exists(),
+        "import_source": str(import_root),
+        "import_source_exists": import_root.exists(),
+        "xlsx_count": xlsx_count,
+    }
     return render_template(
         "import.html",
         last_import=load_last_import_data(),
-        import_source=get_import_source_folder()
+        import_source=import_source,
+        storage_stats=stats,
     )
+
+
+@app.post("/import/upload")
+@admin_required
+def import_upload():
+    files = request.files.getlist("workbooks")
+    if not files:
+        flash("No files selected.", "warning")
+        return redirect(url_for("import_page"))
+
+    import_root = Path(get_import_source_folder()).expanduser()
+    import_root.mkdir(parents=True, exist_ok=True)
+
+    saved = 0
+    skipped = 0
+    for f in files:
+        original_name = (f.filename or "").strip()
+        if not original_name:
+            skipped += 1
+            continue
+        safe_name = secure_filename(original_name)
+        if not safe_name.lower().endswith(".xlsx"):
+            skipped += 1
+            continue
+        m = re.search(r"(20\d{2})", safe_name)
+        target_dir = import_root / m.group(1) if m else import_root
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target_path = target_dir / safe_name
+        f.save(target_path)
+        saved += 1
+
+    if saved == 0:
+        flash("No valid .xlsx files uploaded.", "warning")
+        return redirect(url_for("import_page"))
+
+    flash(f"Uploaded {saved} workbook(s) to import storage.", "success")
+    if skipped:
+        flash(f"Skipped {skipped} file(s) (invalid or empty filename).", "warning")
+
+    if request.form.get("run_after_upload") == "1":
+        rc, _ = run_import_process(trigger="upload")
+        log_audit(
+            "run_import",
+            entity_type="system",
+            entity_id="upload",
+            details=f"Import trigger=upload rc={rc}",
+            status="ok" if rc == 0 else "warn",
+        )
+        if rc == 0:
+            flash("Import complete after upload.", "success")
+        else:
+            flash("Upload complete, but import finished with warnings/errors.", "warning")
+
+    return redirect(url_for("import_page"))
 
 
 @app.post("/import/run")
