@@ -14,6 +14,9 @@ import argparse
 from pathlib import Path
 import csv
 
+BASE_DIR = Path(__file__).resolve().parents[1]
+DEFAULT_DB_PATH = BASE_DIR / "data" / "db" / "tasterist.db"
+
 
 # --------------------------------------------------
 # CONFIG
@@ -128,7 +131,7 @@ def import_csv(path: Path, conn: sqlite3.Connection) -> int:
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--folder", required=True, help="Folder containing CSV files")
-    p.add_argument("--db", default="tasterist.db")
+    p.add_argument("--db", default=str(DEFAULT_DB_PATH))
     p.add_argument("--apply", action="store_true")
     args = p.parse_args()
 

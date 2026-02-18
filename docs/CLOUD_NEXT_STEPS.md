@@ -2,16 +2,14 @@
 
 ## Phase 1 (Now)
 - Deploy with `render.yaml`.
-- Follow: `RENDER_PHASE1_DEPLOY.md`
-- Share run/hosting basics with team: `RUN_AND_HOSTING.md`
+- Follow: `docs/RENDER_PHASE1_DEPLOY.md`
+- Share run/hosting basics with team: `docs/RUN_AND_HOSTING.md`
 - Keep SQLite on mounted disk.
-- Verify `/health` and login/import flow in shared environment.
+- Verify `/health` and manual import flow in shared environment.
 - Verify `/cloud/preflight` is green after first deploy.
 - Set `TASTER_SHEETS_FOLDER` to the shared cloud-accessible folder path.
 - Set `TASTERIST_CANONICAL_HOST=tasterist.com` once custom domain is active.
-- Keep login imports throttled:
-  - `TASTERIST_LOGIN_IMPORT_ENABLED=1`
-  - `TASTERIST_LOGIN_IMPORT_MINUTES=15`
+- Keep import timeout configured:
   - `TASTERIST_IMPORT_TIMEOUT_SEC=120`
 
 ## Phase 1.5 (Hardening)

@@ -18,6 +18,8 @@ import argparse
 import pandas as pd
 from pathlib import Path
 
+BASE_DIR = Path(__file__).resolve().parents[1]
+
 MONTHS = [
     "January","February","March","April","May","June",
     "July","August","September","October","November","December"
@@ -68,7 +70,11 @@ def export_workbook(xlsx_path: Path, out_dir: Path):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", required=True, help="Folder containing .xlsx taster sheets")
-    parser.add_argument("--output", default="csv_exports", help="Output folder for CSV files")
+    parser.add_argument(
+        "--output",
+        default=str(BASE_DIR / "data" / "exports"),
+        help="Output folder for CSV files",
+    )
     args = parser.parse_args()
 
     in_dir = Path(args.input)

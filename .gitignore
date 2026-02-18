@@ -11,6 +11,8 @@ venv/
 # Local databases and journals
 *.db
 *.db-journal
+*.db-shm
+*.db-wal
 
 # OS/editor noise
 .DS_Store
@@ -18,18 +20,18 @@ venv/
 .idea/
 
 # Runtime/import artifacts
-import_previews/last_import.log
-import_previews/last_import_meta.json
-import_previews/*.csv
+data/import_previews/last_import.log
+data/import_previews/last_import_meta.json
+data/import_previews/*.csv
 
 # Local working data exports
-csv_exports/
-Taster Sheets/
-Events_from_*.csv
-tasters_import.csv
-Past Versions/
-Testing Checklist
-SELECT
+data/exports/
+data/taster_sheets/
+data/archive/Events_from_*.csv
+data/archive/tasters_import.csv
+legacy/Past Versions/
+docs/TESTING_CHECKLIST.md
+data/archive/SELECT
 Tasterist.code-workspace
 
 # Environment overrides

@@ -10,12 +10,17 @@ import calendar
 import re
 import subprocess
 import json
+import html
 import tempfile
 import secrets
 import time
+import shutil
+import urllib.error
+import urllib.request
 from functools import wraps
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from flask import (
     Flask, g, render_template, request,
@@ -36,14 +41,21 @@ app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("TASTERIST_SECRET_KEY", "tasterist-dev-key")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(BASE_DIR, "data")
+LOCAL_DB_DIR = os.path.join(DATA_DIR, "db")
+LOCAL_DB_FILE = os.path.join(LOCAL_DB_DIR, "tasterist.db")
+LOCAL_SHEETS_FALLBACK = os.path.join(DATA_DIR, "taster_sheets")
+IMPORT_PREVIEW_DIR = os.path.join(DATA_DIR, "import_previews")
+IMPORT_SCRIPT = os.path.join(BASE_DIR, "scripts", "import_taster_sheets.py")
 DEFAULT_DB_FILE = (
     "/var/data/tasterist.db"
     if (os.environ.get("RENDER") or os.environ.get("TASTERIST_CANONICAL_HOST"))
-    else os.path.join(BASE_DIR, "tasterist.db")
+    else LOCAL_DB_FILE
 )
 DB_FILE = os.environ.get("TASTERIST_DB_FILE", DEFAULT_DB_FILE)
-IMPORT_LOG_FILE = os.path.join(BASE_DIR, "import_previews", "last_import.log")
-IMPORT_META_FILE = os.path.join(BASE_DIR, "import_previews", "last_import_meta.json")
+IMPORT_LOG_FILE = os.path.join(IMPORT_PREVIEW_DIR, "last_import.log")
+IMPORT_META_FILE = os.path.join(IMPORT_PREVIEW_DIR, "last_import_meta.json")
+RESTORE_LOG_FILE = os.path.join(IMPORT_PREVIEW_DIR, "last_restore.log")
 DAY_ORDER = {
     "Monday": 0,
     "Tuesday": 1,
@@ -73,13 +85,47 @@ WEAK_PASSWORDS = {
 LOGIN_RATE_LIMIT_WINDOW_SEC = int(os.environ.get("TASTERIST_LOGIN_WINDOW_SEC", "900"))
 LOGIN_RATE_LIMIT_ATTEMPTS = int(os.environ.get("TASTERIST_LOGIN_MAX_ATTEMPTS", "8"))
 LOGIN_LOCKOUT_SEC = int(os.environ.get("TASTERIST_LOGIN_LOCKOUT_SEC", "900"))
-LOGIN_ATTEMPTS = {}
 SQLITE_BUSY_TIMEOUT_MS = int(os.environ.get("TASTERIST_SQLITE_BUSY_TIMEOUT_MS", "60000"))
 DB_INIT_MAX_RETRIES = int(os.environ.get("TASTERIST_DB_INIT_MAX_RETRIES", "8"))
+ADMIN_DAY_PROGRAMMES = ("preschool", "honley", "lockwood")
+ADMIN_DAY_HIDDEN_CELLS = {
+    ("Monday", "lockwood"),
+    ("Tuesday", "preschool"),
+    ("Thursday", "preschool"),
+    ("Saturday", "preschool"),
+}
+EMAIL_FROM_DEFAULT = os.environ.get("TASTERIST_EMAIL_FROM", "Tasterist <noreply@tasterist.com>").strip()
 
 
 def is_env_true(name, default="0"):
     return os.environ.get(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def email_owner_only_mode():
+    # Hard-safety default: weekly emails only go to owner address.
+    return is_env_true("TASTERIST_EMAIL_OWNER_ONLY", "1")
+
+
+def email_enabled():
+    # Explicit opt-in switch to prevent accidental sends on first deploy.
+    return is_env_true("TASTERIST_EMAIL_ENABLED", "0")
+
+
+def safe_internal_target(raw_target):
+    target = (raw_target or "").strip()
+    if not target:
+        return None
+    parsed = urlsplit(target)
+    if parsed.scheme or parsed.netloc:
+        return None
+    if not target.startswith("/") or target.startswith("//"):
+        return None
+    return target
+
+
+def destructive_imports_enabled():
+    # Safety default: replace-all imports stay disabled unless explicitly opted in.
+    return is_env_true("TASTERIST_ALLOW_DESTRUCTIVE_IMPORTS", "0")
 
 
 def _running_in_prod():
@@ -131,7 +177,11 @@ def get_import_source_folder():
     if os.path.isdir(onedrive_default):
         return onedrive_default
 
-    return os.path.join(BASE_DIR, "Taster Sheets")
+    legacy_local = os.path.join(BASE_DIR, "Taster Sheets")
+    if os.path.isdir(legacy_local):
+        return legacy_local
+
+    return LOCAL_SHEETS_FALLBACK
 
 # ==========================================================
 # DATABASE
@@ -158,12 +208,32 @@ def close_db(exception):
         db.close()
 
 
+def close_request_db_if_open():
+    try:
+        db = g.pop("_db", None)
+    except RuntimeError:
+        return
+    if db:
+        db.close()
+
+
 @app.after_request
 def apply_security_headers(response):
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
     response.headers.setdefault("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        (
+            "default-src 'self'; "
+            "img-src 'self' data: https:; "
+            "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+            "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+            "font-src 'self' https://cdn.jsdelivr.net; "
+            "connect-src 'self'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'"
+        ),
+    )
     if _running_in_prod():
         response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
     return response
@@ -235,6 +305,7 @@ def _init_db_once():
             full_name TEXT NOT NULL DEFAULT '',
             role TEXT NOT NULL DEFAULT 'staff',
             password_must_change INTEGER NOT NULL DEFAULT 0,
+            email_weekly_reports INTEGER NOT NULL DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -263,6 +334,15 @@ def _init_db_once():
             details TEXT NOT NULL DEFAULT ''
         )
     """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS login_attempts (
+            ip_key TEXT PRIMARY KEY,
+            count INTEGER NOT NULL DEFAULT 0,
+            window_start REAL NOT NULL DEFAULT 0,
+            locked_until REAL NOT NULL DEFAULT 0,
+            updated_at REAL NOT NULL DEFAULT 0
+        )
+    """)
 
     cur.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS uniq_taster
@@ -275,6 +355,10 @@ def _init_db_once():
     cur.execute("""
         CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at
         ON audit_logs (created_at DESC)
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_login_attempts_updated_at
+        ON login_attempts (updated_at DESC)
     """)
     # Backward-compat: old DBs may still use leave_date only.
     leaver_cols = {
@@ -340,6 +424,8 @@ def _init_db_once():
         cur.execute("ALTER TABLE users ADD COLUMN full_name TEXT NOT NULL DEFAULT ''")
     if "password_must_change" not in user_cols:
         cur.execute("ALTER TABLE users ADD COLUMN password_must_change INTEGER NOT NULL DEFAULT 0")
+    if "email_weekly_reports" not in user_cols:
+        cur.execute("ALTER TABLE users ADD COLUMN email_weekly_reports INTEGER NOT NULL DEFAULT 0")
 
     cur.execute("DROP INDEX IF EXISTS uniq_class_session")
     cur.execute("""
@@ -359,8 +445,8 @@ def _init_db_once():
             print("⚠️ Set TASTERIST_OWNER_BOOTSTRAP_PASSWORD for predictable first boot credentials.")
         owner_must_change = 1 if (password_strength_errors(owner_bootstrap_password) or is_password_weak_literal(owner_bootstrap_password)) else 0
         cur.execute("""
-            INSERT INTO users (username, password_hash, full_name, role, password_must_change)
-            VALUES (?, ?, ?, 'owner', ?)
+            INSERT INTO users (username, password_hash, full_name, role, password_must_change, email_weekly_reports)
+            VALUES (?, ?, ?, 'owner', ?, 1)
         """, (OWNER_EMAIL, generate_password_hash(owner_bootstrap_password), OWNER_NAME, owner_must_change))
 
     existing_owner = cur.execute(
@@ -383,8 +469,8 @@ def _init_db_once():
             print("⚠️ Owner account missing: created owner with generated bootstrap password.")
         owner_must_change = 1 if (password_strength_errors(owner_bootstrap_password) or is_password_weak_literal(owner_bootstrap_password)) else 0
         cur.execute("""
-            INSERT INTO users (username, password_hash, full_name, role, password_must_change)
-            VALUES (?, ?, ?, 'owner', ?)
+            INSERT INTO users (username, password_hash, full_name, role, password_must_change, email_weekly_reports)
+            VALUES (?, ?, ?, 'owner', ?, 1)
         """, (OWNER_EMAIL, generate_password_hash(owner_bootstrap_password), OWNER_NAME, owner_must_change))
 
     # Break-glass owner reset for cloud recovery.
@@ -442,12 +528,127 @@ def init_db():
             time.sleep(1.5)
 
 
+def maybe_restore_sqlite_from_postgres():
+    auto_raw = os.environ.get("TASTERIST_AUTO_RESTORE_FROM_POSTGRES")
+    # Safety-first: explicit opt-in only.
+    auto_enabled = False if auto_raw is None else auto_raw.strip().lower() in {"1", "true", "yes", "on"}
+    if not auto_enabled:
+        return
+
+    postgres_url = os.environ.get("DATABASE_URL", "").strip()
+    if not postgres_url:
+        return
+
+    try:
+        import psycopg
+    except Exception as exc:
+        print(f"⚠️ Auto-restore skipped: psycopg unavailable ({exc})")
+        return
+
+    table_order = (
+        "users",
+        "class_sessions",
+        "tasters",
+        "leavers",
+        "user_admin_days",
+        "audit_logs",
+    )
+
+    sqlite_conn = None
+    pg_conn = None
+    try:
+        sqlite_conn = sqlite3.connect(DB_FILE, timeout=max(5, SQLITE_BUSY_TIMEOUT_MS // 1000))
+        sqlite_conn.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
+        sqlite_cur = sqlite_conn.cursor()
+        local_tasters = sqlite_cur.execute("SELECT COUNT(*) FROM tasters").fetchone()[0]
+        if int(local_tasters or 0) > 0:
+            print(f"ℹ️ Auto-restore skipped: SQLite already has tasters ({local_tasters}).")
+            return
+
+        pg_conn = psycopg.connect(postgres_url)
+        with pg_conn.cursor() as pg_cur:
+            pg_cur.execute("SELECT COUNT(*) FROM tasters")
+            pg_tasters = int(pg_cur.fetchone()[0] or 0)
+        if pg_tasters <= 0:
+            print("ℹ️ Auto-restore skipped: Postgres has no taster rows.")
+            return
+
+        if os.path.exists(DB_FILE) and os.path.getsize(DB_FILE) > 0:
+            ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+            backup_file = os.path.join(
+                os.path.dirname(DB_FILE),
+                f"tasterist-autobackup-before-pg-restore-{ts}.db",
+            )
+            shutil.copy2(DB_FILE, backup_file)
+            print(f"ℹ️ Auto-restore backup created: {backup_file}")
+
+        def sqlite_columns(table_name):
+            rows = sqlite_conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+            return [r[1] for r in rows]
+
+        def postgres_columns(table_name):
+            with pg_conn.cursor() as pg_cur:
+                pg_cur.execute(
+                    """
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_schema='public' AND table_name=%s
+                    ORDER BY ordinal_position
+                    """,
+                    (table_name,),
+                )
+                return [r[0] for r in pg_cur.fetchall()]
+
+        total_synced = 0
+        for table_name in table_order:
+            src_cols = postgres_columns(table_name)
+            dst_cols = sqlite_columns(table_name)
+            cols = [c for c in src_cols if c in dst_cols]
+            if not cols:
+                print(f"⚠️ Auto-restore skipped table {table_name}: no shared columns.")
+                continue
+
+            col_list = ", ".join(cols)
+            with pg_conn.cursor() as pg_cur:
+                pg_cur.execute(f"SELECT {col_list} FROM {table_name}")
+                rows = pg_cur.fetchall()
+
+            if rows:
+                placeholders = ", ".join(["?"] * len(cols))
+                if "id" in cols:
+                    updates = ", ".join([f"{c}=excluded.{c}" for c in cols if c != "id"])
+                    sql = (
+                        f"INSERT INTO {table_name} ({col_list}) VALUES ({placeholders}) "
+                        f"ON CONFLICT(id) DO UPDATE SET {updates}"
+                    )
+                else:
+                    sql = f"INSERT INTO {table_name} ({col_list}) VALUES ({placeholders})"
+                sqlite_cur.executemany(sql, rows)
+                sqlite_conn.commit()
+
+            total_synced += len(rows)
+            print(f"ℹ️ Auto-restore {table_name}: {len(rows)} row(s)")
+
+        final_count = sqlite_cur.execute("SELECT COUNT(*) FROM tasters").fetchone()[0]
+        print(
+            "✅ Auto-restore complete from Postgres. "
+            f"Total rows synced: {total_synced}; tasters now: {final_count}"
+        )
+    except Exception as exc:
+        print(f"⚠️ Auto-restore from Postgres failed: {exc}")
+    finally:
+        if sqlite_conn is not None:
+            sqlite_conn.close()
+        if pg_conn is not None:
+            pg_conn.close()
+
+
 def current_user():
     user_id = session.get("user_id")
     if not user_id:
         return None
     row = query(
-        "SELECT id, username, full_name, role, password_must_change FROM users WHERE id=?",
+        "SELECT id, username, full_name, role, password_must_change, email_weekly_reports FROM users WHERE id=?",
         (user_id,)
     )
     if not row:
@@ -505,18 +706,62 @@ def normalise_existing_child_names(db):
     return changed
 
 
+def admin_day_cell_allowed(day_name, programme):
+    if day_name not in DAY_ORDER:
+        return False
+    if programme not in ADMIN_DAY_PROGRAMMES:
+        return False
+    if day_name == "Sunday":
+        return False
+    return (day_name, programme) not in ADMIN_DAY_HIDDEN_CELLS
+
+
+def build_admin_day_grouped_options():
+    grouped = []
+    for day_name in WEEKDAY_NAMES:
+        if day_name == "Sunday":
+            continue
+        cells = []
+        for programme in ADMIN_DAY_PROGRAMMES:
+            cells.append({
+                "programme": programme,
+                "value": f"{day_name}|{programme}",
+                "visible": admin_day_cell_allowed(day_name, programme),
+            })
+        grouped.append({
+            "day_name": day_name,
+            "cells": cells,
+        })
+    return grouped
+
+
+def parse_admin_day_values(values):
+    allowed_pairs = []
+    seen = set()
+    for value in values:
+        if "|" not in value:
+            continue
+        day_name, programme = value.split("|", 1)
+        if not admin_day_cell_allowed(day_name, programme):
+            continue
+        key = (day_name, programme)
+        if key in seen:
+            continue
+        seen.add(key)
+        allowed_pairs.append(key)
+    return allowed_pairs
+
+
 def is_admin_user(user):
     if not user:
         return False
-    if user.get("role") in {"admin", "owner"}:
-        return True
-    return user.get("username", "").lower() == OWNER_EMAIL
+    return user.get("role") in {"admin", "owner"}
 
 
 def is_owner_user(user):
     if not user:
         return False
-    return user.get("role") == "owner" or user.get("username", "").lower() == OWNER_EMAIL
+    return user.get("role") == "owner"
 
 
 def owner_required(view_func):
@@ -576,32 +821,65 @@ def client_ip_key():
 
 def is_login_rate_limited(ip_key):
     now = time.time()
-    state = LOGIN_ATTEMPTS.get(ip_key)
-    if not state:
+    row = get_db().execute(
+        "SELECT count, window_start, locked_until FROM login_attempts WHERE ip_key=?",
+        (ip_key,),
+    ).fetchone()
+    if not row:
         return False, 0
-    if state.get("locked_until", 0) > now:
-        wait_sec = int(state["locked_until"] - now)
+    locked_until = float(row["locked_until"] or 0)
+    window_start = float(row["window_start"] or 0)
+    if locked_until > now:
+        wait_sec = int(locked_until - now)
         return True, max(wait_sec, 1)
-    if now - state.get("window_start", 0) > LOGIN_RATE_LIMIT_WINDOW_SEC:
-        LOGIN_ATTEMPTS.pop(ip_key, None)
+    if now - window_start > LOGIN_RATE_LIMIT_WINDOW_SEC:
+        db = get_db()
+        db.execute("DELETE FROM login_attempts WHERE ip_key=?", (ip_key,))
+        db.commit()
     return False, 0
 
 
 def record_failed_login(ip_key):
+    db = get_db()
     now = time.time()
-    state = LOGIN_ATTEMPTS.get(ip_key)
-    if not state or now - state.get("window_start", 0) > LOGIN_RATE_LIMIT_WINDOW_SEC:
-        state = {"count": 0, "window_start": now, "locked_until": 0}
-    state["count"] += 1
-    if state["count"] >= LOGIN_RATE_LIMIT_ATTEMPTS:
-        state["locked_until"] = now + LOGIN_LOCKOUT_SEC
-        state["count"] = 0
-        state["window_start"] = now
-    LOGIN_ATTEMPTS[ip_key] = state
+    row = db.execute(
+        "SELECT count, window_start, locked_until FROM login_attempts WHERE ip_key=?",
+        (ip_key,),
+    ).fetchone()
+
+    if not row or now - float(row["window_start"] or 0) > LOGIN_RATE_LIMIT_WINDOW_SEC:
+        count = 1
+        window_start = now
+        locked_until = 0
+    else:
+        count = int(row["count"] or 0) + 1
+        window_start = float(row["window_start"] or now)
+        locked_until = float(row["locked_until"] or 0)
+
+    if count >= LOGIN_RATE_LIMIT_ATTEMPTS:
+        locked_until = now + LOGIN_LOCKOUT_SEC
+        count = 0
+        window_start = now
+
+    db.execute(
+        """
+        INSERT INTO login_attempts (ip_key, count, window_start, locked_until, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(ip_key) DO UPDATE SET
+            count=excluded.count,
+            window_start=excluded.window_start,
+            locked_until=excluded.locked_until,
+            updated_at=excluded.updated_at
+        """,
+        (ip_key, count, window_start, locked_until, now),
+    )
+    db.commit()
 
 
 def clear_login_failures(ip_key):
-    LOGIN_ATTEMPTS.pop(ip_key, None)
+    db = get_db()
+    db.execute("DELETE FROM login_attempts WHERE ip_key=?", (ip_key,))
+    db.commit()
 
 
 def admin_required(view_func):
@@ -646,6 +924,8 @@ def inject_current_user():
         "current_user": user,
         "is_admin_user": is_admin_user(user),
         "is_owner_user": is_owner_user(user),
+        "destructive_imports_enabled": destructive_imports_enabled(),
+        "email_owner_only_mode": email_owner_only_mode(),
         "user_initials": user_initials,
         "csrf_token": get_csrf_token,
         "csrf_field": csrf_field,
@@ -674,7 +954,7 @@ def enforce_canonical_host():
 def enforce_csrf():
     if request.method not in {"POST", "PUT", "PATCH", "DELETE"}:
         return None
-    if request.endpoint in {"static", "health"}:
+    if request.endpoint in {"static", "health", "cron_weekly_admin_report"}:
         return None
     if not validate_csrf_token():
         abort(400, description="Invalid CSRF token")
@@ -683,7 +963,7 @@ def enforce_csrf():
 
 @app.before_request
 def require_login():
-    allowed = {"login", "signup", "static", "health"}
+    allowed = {"login", "signup", "static", "health", "cron_weekly_admin_report"}
     if request.endpoint in allowed:
         return None
     user = current_user()
@@ -734,33 +1014,13 @@ def login():
             or password_strength_errors(password)
         )
         log_audit("login", entity_type="user", entity_id=user_rows[0]["id"], details="Successful login")
-        if should_run_login_import():
-            rc, _ = run_import_process(trigger="login")
-            log_audit(
-                "run_import",
-                entity_type="system",
-                entity_id="login",
-                details=f"Import trigger=login rc={rc}",
-                status="ok" if rc == 0 else "warn",
-            )
-            last_import = load_last_import_data() or {}
-            warning_count = len(last_import.get("warnings", []))
-            if rc != 0:
-                flash("Signed in. Login import failed; check monitor status.", "warning")
-            elif warning_count > 0:
-                flash("Signed in. Login import completed with warnings.", "warning")
-            else:
-                flash("Signed in.", "success")
-        else:
-            flash("Signed in.", "success")
+        flash("Signed in.", "success")
 
         if session.get("must_change_password"):
             flash("Security update: please change your password now.", "warning")
             return redirect(url_for("account_settings"))
 
-        target = request.args.get("next")
-        if not target or not target.startswith("/"):
-            target = url_for("dashboard")
+        target = safe_internal_target(request.args.get("next")) or url_for("dashboard")
         return redirect(target)
 
     return render_template("login.html")
@@ -836,45 +1096,335 @@ def load_last_import_data():
     }
 
 
-def load_import_meta():
-    if not os.path.exists(IMPORT_META_FILE):
-        return None
+def three_month_cutoff_date(today_dt):
+    cutoff_month = today_dt.month - 3
+    cutoff_year = today_dt.year
+    while cutoff_month <= 0:
+        cutoff_month += 12
+        cutoff_year -= 1
+    cutoff_day = min(today_dt.day, calendar.monthrange(cutoff_year, cutoff_month)[1])
+    return date(cutoff_year, cutoff_month, cutoff_day)
+
+
+def _weekly_report_assignment_set(db, user_id):
+    if not user_id:
+        return set()
+    rows = db.execute(
+        "SELECT day_name, programme FROM user_admin_days WHERE user_id=?",
+        (user_id,),
+    ).fetchall()
+    return {(r["day_name"], r["programme"]) for r in rows}
+
+
+def _row_applies_to_assignments(assignment_set, day_name, programme):
+    if not assignment_set:
+        return True
+    return (day_name, programme) in assignment_set
+
+
+def weekday_from_iso(value):
     try:
-        with open(IMPORT_META_FILE, "r", encoding="utf-8") as f:
-            meta = json.load(f)
-        return meta if isinstance(meta, dict) else None
-    except (OSError, json.JSONDecodeError):
-        return None
-
-
-def should_run_login_import():
-    enabled = os.environ.get("TASTERIST_LOGIN_IMPORT_ENABLED", "0").strip().lower()
-    if enabled not in {"1", "true", "yes", "on"}:
-        return False
-
-    min_minutes_raw = os.environ.get("TASTERIST_LOGIN_IMPORT_MINUTES", "15").strip()
-    try:
-        min_minutes = max(1, int(min_minutes_raw))
+        return datetime.fromisoformat(str(value)).strftime("%A")
     except ValueError:
-        min_minutes = 15
+        return ""
 
-    meta = load_import_meta()
-    if not meta:
-        return True
-    run_at_raw = str(meta.get("run_at") or "").strip()
-    if not run_at_raw:
-        return True
+
+def build_weekly_admin_report_context(db, user_id=None):
+    today_dt = date.today()
+    today_iso = today_dt.isoformat()
+    week_start_dt = today_dt - timedelta(days=6)
+    week_start_iso = week_start_dt.isoformat()
+    cutoff_dt = three_month_cutoff_date(today_dt)
+    cutoff_iso = cutoff_dt.isoformat()
+    month_key = today_dt.strftime("%Y-%m")
+    assignment_set = _weekly_report_assignment_set(db, user_id)
+
+    raw_followups = db.execute(
+        """
+        SELECT
+            id, child, programme, taster_date, session, class_name,
+            attended, club_fees, bg, badge, reschedule_contacted
+        FROM tasters
+        WHERE taster_date>=?
+          AND taster_date<=?
+          AND (attended=0 OR club_fees=0 OR bg=0 OR badge=0)
+        ORDER BY taster_date DESC, programme, session, child
+        """,
+        (cutoff_iso, today_iso),
+    ).fetchall()
+
+    followups = []
+    followups_by_programme = {"preschool": 0, "honley": 0, "lockwood": 0}
+    this_week_open = 0
+    for row in raw_followups:
+        row_dict = dict(row)
+        day_name = weekday_from_iso(row_dict["taster_date"])
+        if not day_name:
+            continue
+        if not _row_applies_to_assignments(assignment_set, day_name, row_dict["programme"]):
+            continue
+        pending = []
+        if int(row_dict["attended"] or 0) == 0:
+            pending.append("Attended")
+        if int(row_dict["club_fees"] or 0) == 0:
+            pending.append("Club Fees")
+        if int(row_dict["bg"] or 0) == 0:
+            pending.append("BG")
+        if int(row_dict["badge"] or 0) == 0:
+            pending.append("Badge")
+        row_dict["pending_labels"] = pending
+        row_dict["day_name"] = day_name
+        followups.append(row_dict)
+        if row_dict["programme"] in followups_by_programme:
+            followups_by_programme[row_dict["programme"]] += 1
+        if row_dict["taster_date"] >= week_start_iso:
+            this_week_open += 1
+
+    raw_members = db.execute(
+        """
+        SELECT taster_date, programme
+        FROM tasters
+        WHERE strftime('%Y-%m', taster_date)=?
+          AND attended=1
+          AND club_fees=1
+          AND bg=1
+          AND badge=1
+        """,
+        (month_key,),
+    ).fetchall()
+    members_month = 0
+    for row in raw_members:
+        day_name = weekday_from_iso(row["taster_date"])
+        if not day_name:
+            continue
+        if not _row_applies_to_assignments(assignment_set, day_name, row["programme"]):
+            continue
+        members_month += 1
+
+    raw_leavers = db.execute(
+        """
+        SELECT programme, leave_date, class_day, session
+        FROM leavers
+        WHERE leave_month=?
+        """,
+        (month_key,),
+    ).fetchall()
+    leavers_month = 0
+    for row in raw_leavers:
+        day_name = (
+            extract_day_name(row["class_day"])
+            or extract_day_name(row["session"])
+        )
+        leave_date = str(row["leave_date"] or "").strip()
+        if not day_name and leave_date:
+            try:
+                day_name = datetime.fromisoformat(leave_date).strftime("%A")
+            except ValueError:
+                day_name = ""
+        if not _row_applies_to_assignments(assignment_set, day_name, row["programme"]):
+            continue
+        leavers_month += 1
+
+    return {
+        "today": today_dt,
+        "today_iso": today_iso,
+        "week_start_iso": week_start_iso,
+        "cutoff_iso": cutoff_iso,
+        "month_label": today_dt.strftime("%B %Y"),
+        "assignment_count": len(assignment_set),
+        "followup_total": len(followups),
+        "followups_by_programme": followups_by_programme,
+        "this_week_open": this_week_open,
+        "members_month": members_month,
+        "leavers_month": leavers_month,
+        "top_followups": followups[:14],
+    }
+
+
+def build_weekly_admin_report_message(context, recipient_name="Team"):
+    followup_lines = []
+    for row in context["top_followups"]:
+        pending = ", ".join(row["pending_labels"]) if row["pending_labels"] else "No checks pending"
+        session_label = (row.get("session") or "").strip() or "Session TBD"
+        followup_lines.append(
+            f"- {row['taster_date']} | {row['programme'].title()} | {row['child']} | {session_label} | Pending: {pending}"
+        )
+
+    if not followup_lines:
+        followup_lines = ["- No outstanding follow-ups in scope."]
+
+    subject = f"Tasterist Weekly Admin Report - {context['today'].strftime('%d %b %Y')}"
+    scope_label = (
+        "All programmes"
+        if context["assignment_count"] == 0
+        else f"Assigned cells only ({context['assignment_count']})"
+    )
+    text_body = (
+        f"Hello {recipient_name},\n\n"
+        "Here is your weekly Tasterist admin summary.\n\n"
+        f"Scope: {scope_label}\n"
+        f"Open follow-ups (last 3 months): {context['followup_total']}\n"
+        f"Open follow-ups created this week: {context['this_week_open']}\n"
+        f"Members this month ({context['month_label']}): {context['members_month']}\n"
+        f"Leavers this month ({context['month_label']}): {context['leavers_month']}\n"
+        f"By programme: Preschool {context['followups_by_programme']['preschool']}, "
+        f"Honley {context['followups_by_programme']['honley']}, "
+        f"Lockwood {context['followups_by_programme']['lockwood']}\n\n"
+        "Top items to action:\n"
+        + "\n".join(followup_lines)
+        + "\n\nRegards,\nTasterist"
+    )
+
+    html_lines = []
+    for row in context["top_followups"]:
+        pending = ", ".join(row["pending_labels"]) if row["pending_labels"] else "No checks pending"
+        session_label = (row.get("session") or "").strip() or "Session TBD"
+        html_lines.append(
+            "<li>"
+            f"{html.escape(str(row['taster_date']))} | "
+            f"{html.escape(row['programme'].title())} | "
+            f"{html.escape(row['child'])} | "
+            f"{html.escape(session_label)} | "
+            f"Pending: {html.escape(pending)}"
+            "</li>"
+        )
+    if not html_lines:
+        html_lines.append("<li>No outstanding follow-ups in scope.</li>")
+
+    html_body = (
+        "<!doctype html><html><body style='font-family:Arial,sans-serif;color:#0f172a'>"
+        f"<p>Hello {html.escape(recipient_name)},</p>"
+        "<p>Here is your weekly Tasterist admin summary.</p>"
+        "<ul>"
+        f"<li><strong>Scope:</strong> {html.escape(scope_label)}</li>"
+        f"<li><strong>Open follow-ups (last 3 months):</strong> {context['followup_total']}</li>"
+        f"<li><strong>Open follow-ups created this week:</strong> {context['this_week_open']}</li>"
+        f"<li><strong>Members this month ({html.escape(context['month_label'])}):</strong> {context['members_month']}</li>"
+        f"<li><strong>Leavers this month ({html.escape(context['month_label'])}):</strong> {context['leavers_month']}</li>"
+        f"<li><strong>By programme:</strong> Preschool {context['followups_by_programme']['preschool']}, "
+        f"Honley {context['followups_by_programme']['honley']}, "
+        f"Lockwood {context['followups_by_programme']['lockwood']}</li>"
+        "</ul>"
+        "<p><strong>Top items to action</strong></p>"
+        f"<ul>{''.join(html_lines)}</ul>"
+        "<p>Regards,<br>Tasterist</p>"
+        "</body></html>"
+    )
+    return subject, text_body, html_body
+
+
+def send_email_via_cloudflare_webhook(to_email, subject, text_body, html_body):
+    webhook_url = os.environ.get("TASTERIST_EMAIL_WEBHOOK_URL", "").strip()
+    if not webhook_url:
+        raise RuntimeError("TASTERIST_EMAIL_WEBHOOK_URL is not set.")
+
+    payload = {
+        "from": EMAIL_FROM_DEFAULT,
+        "to": to_email,
+        "subject": subject,
+        "text": text_body,
+        "html": html_body,
+    }
+    req = urllib.request.Request(
+        webhook_url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    webhook_token = os.environ.get("TASTERIST_EMAIL_WEBHOOK_TOKEN", "").strip()
+    if webhook_token:
+        req.add_header("Authorization", f"Bearer {webhook_token}")
+
     try:
-        last_run = datetime.fromisoformat(run_at_raw)
-    except ValueError:
-        return True
-    return datetime.now() - last_run >= timedelta(minutes=min_minutes)
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            response_body = resp.read().decode("utf-8", errors="replace")
+            status_code = int(resp.getcode() or 0)
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Email webhook HTTP {exc.code}: {detail[:300]}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Email webhook connection failed: {exc}") from exc
+
+    if status_code not in {200, 201, 202}:
+        raise RuntimeError(f"Email webhook returned unexpected status {status_code}: {response_body[:300]}")
+
+    return {"status_code": status_code, "body": response_body[:300]}
+
+
+def send_weekly_admin_report(trigger="manual"):
+    db = get_db()
+    owner_only = email_owner_only_mode()
+    if not email_enabled():
+        return {"sent": 0, "recipients": [], "owner_only": owner_only, "disabled": True}
+
+    recipients = []
+    if owner_only:
+        recipients = [OWNER_EMAIL]
+    else:
+        rows = db.execute(
+            """
+            SELECT username
+            FROM users
+            WHERE email_weekly_reports=1
+            ORDER BY username
+            """
+        ).fetchall()
+        recipients = [r["username"].strip().lower() for r in rows if (r["username"] or "").strip()]
+
+    deduped = []
+    seen = set()
+    for email_addr in recipients:
+        e = email_addr.strip().lower()
+        if not e or e in seen:
+            continue
+        seen.add(e)
+        deduped.append(e)
+    recipients = deduped
+    if not recipients:
+        return {"sent": 0, "recipients": [], "owner_only": owner_only}
+
+    sent_count = 0
+    for recipient in recipients:
+        user_row = db.execute(
+            """
+            SELECT id, full_name
+            FROM users
+            WHERE lower(username)=?
+            """,
+            (recipient,),
+        ).fetchone()
+        user_id = user_row["id"] if user_row and not owner_only else None
+        recipient_name = (
+            (user_row["full_name"] or "").strip().split(" ")[0]
+            if user_row and (user_row["full_name"] or "").strip()
+            else "Team"
+        )
+        context = build_weekly_admin_report_context(db, user_id=user_id)
+        subject, text_body, html_body = build_weekly_admin_report_message(context, recipient_name=recipient_name)
+        send_email_via_cloudflare_webhook(recipient, subject, text_body, html_body)
+        sent_count += 1
+        log_audit(
+            "weekly_admin_report_email",
+            entity_type="user",
+            entity_id=recipient,
+            details=f"trigger={trigger} sent_to={recipient} open_followups={context['followup_total']}",
+        )
+
+    return {
+        "sent": sent_count,
+        "recipients": recipients,
+        "owner_only": owner_only,
+        "disabled": False,
+    }
 
 
 def run_import_process(trigger="manual", replace=False):
+    if replace and not destructive_imports_enabled():
+        print("⚠️ Replace-all import requested but blocked (TASTERIST_ALLOW_DESTRUCTIVE_IMPORTS is off).")
+        replace = False
     import_source = get_import_source_folder()
     os.makedirs(import_source, exist_ok=True)
-    local_fallback = os.path.join(BASE_DIR, "Taster Sheets")
+    local_fallback = LOCAL_SHEETS_FALLBACK
     timeout_raw = os.environ.get("TASTERIST_IMPORT_TIMEOUT_SEC", "120").strip()
     try:
         timeout_seconds = max(15, int(timeout_raw))
@@ -882,7 +1432,7 @@ def run_import_process(trigger="manual", replace=False):
         timeout_seconds = 120
     cmd = [
         sys.executable,
-        "import_taster_sheets.py",
+        IMPORT_SCRIPT,
         "--folder", import_source,
         "--db", DB_FILE,
     ]
@@ -890,6 +1440,8 @@ def run_import_process(trigger="manual", replace=False):
         cmd.append("--apply")
     if os.path.isdir(local_fallback):
         cmd.extend(["--fallback-folder", local_fallback])
+    # Release the request DB handle before subprocess touches the same SQLite file.
+    close_request_db_if_open()
     try:
         result = subprocess.run(
             cmd, cwd=BASE_DIR, capture_output=True, text=True, timeout=timeout_seconds
@@ -980,12 +1532,30 @@ def normalise_session_label(value):
     s = str(value).strip()
     if not s:
         return ""
-    m = re.search(r"(\d{1,2}):(\d{2})", s)
+    s = re.sub(
+        r"^(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+",
+        "",
+        s,
+        flags=re.IGNORECASE,
+    )
+    m = re.search(r"\b(\d{1,2}):(\d{2})(?::\d{2})?\s*([ap]m)?\b", s, flags=re.IGNORECASE)
     if not m:
         return s
     hour = int(m.group(1))
-    minute = m.group(2)
-    return f"{hour:02d}:{minute}"
+    minute = int(m.group(2))
+    meridiem = (m.group(3) or "").lower()
+    if minute > 59:
+        return s
+    if meridiem:
+        if hour < 1 or hour > 12:
+            return s
+        if meridiem == "am":
+            hour = 0 if hour == 12 else hour
+        else:
+            hour = 12 if hour == 12 else hour + 12
+    elif hour > 23:
+        return s
+    return f"{hour:02d}:{minute:02d}"
 
 
 def _hhmm_to_minutes(value):
@@ -1071,7 +1641,7 @@ def _candidate_workbooks(root_path, programme, year):
 
 def find_programme_workbook(programme, year, prefer_local=True, local_only=False):
     source_root = Path(get_import_source_folder()).expanduser().resolve()
-    fallback_root = Path(BASE_DIR, "Taster Sheets").resolve()
+    fallback_root = Path(LOCAL_SHEETS_FALLBACK).resolve()
     if local_only:
         roots = (fallback_root,)
     else:
@@ -1085,7 +1655,7 @@ def find_programme_workbook(programme, year, prefer_local=True, local_only=False
 
 def excel_sync_local_only_mode():
     # Default behaviour:
-    # - local/dev: write only to fallback "Taster Sheets" copies
+    # - local/dev: write only to local fallback workbook copies
     # - cloud/render: write to configured TASTER_SHEETS_FOLDER
     raw = os.environ.get("TASTERIST_EXCEL_SYNC_LOCAL_ONLY")
     if raw is not None:
@@ -1318,7 +1888,7 @@ def sync_taster_to_excel(taster_row, mode="add", changed_field="", actor_initial
     )
     if workbook is None:
         if local_only_sync:
-            return False, "Local workbook not found in Taster Sheets for programme/year"
+            return False, "Local workbook not found in fallback sheets folder for programme/year"
         return False, "Workbook not found in configured sheets folder for programme/year"
 
     try:
@@ -1470,7 +2040,7 @@ def sync_leaver_to_excel(leaver_row, actor_initials=""):
     )
     if workbook is None:
         if local_only_sync:
-            return False, "Local workbook not found in Taster Sheets for programme/year"
+            return False, "Local workbook not found in fallback sheets folder for programme/year"
         return False, "Workbook not found in configured sheets folder for programme/year"
     try:
         wb = load_workbook(workbook)
@@ -2041,10 +2611,80 @@ def day_detail(date_str):
 
     df = load_tasters_df(programme)
     day_df = df[df["taster_date"] == selected] if not df.empty else df
+    day_stats = {
+        "total": 0,
+        "attended": 0,
+        "club_fees": 0,
+        "bg": 0,
+        "badge": 0,
+        "fully_complete": 0,
+        "to_action": 0,
+        "completion_pct": 0,
+    }
+    session_totals = []
+
+    if not day_df.empty:
+        attended_flag = pd.to_numeric(day_df["attended"], errors="coerce").fillna(0).astype(int).clip(0, 1)
+        fees_flag = pd.to_numeric(day_df["club_fees"], errors="coerce").fillna(0).astype(int).clip(0, 1)
+        bg_flag = pd.to_numeric(day_df["bg"], errors="coerce").fillna(0).astype(int).clip(0, 1)
+        badge_flag = pd.to_numeric(day_df["badge"], errors="coerce").fillna(0).astype(int).clip(0, 1)
+        complete_mask = (attended_flag == 1) & (fees_flag == 1) & (bg_flag == 1) & (badge_flag == 1)
+
+        total_rows = int(len(day_df.index))
+        fully_complete = int(complete_mask.sum())
+        to_action = max(0, total_rows - fully_complete)
+        completion_pct = int(round((fully_complete / total_rows) * 100)) if total_rows else 0
+
+        day_stats = {
+            "total": total_rows,
+            "attended": int(attended_flag.sum()),
+            "club_fees": int(fees_flag.sum()),
+            "bg": int(bg_flag.sum()),
+            "badge": int(badge_flag.sum()),
+            "fully_complete": fully_complete,
+            "to_action": to_action,
+            "completion_pct": completion_pct,
+        }
+
+        grouped_df = day_df.copy()
+        grouped_df["_attended"] = attended_flag
+        grouped_df["_fees"] = fees_flag
+        grouped_df["_bg"] = bg_flag
+        grouped_df["_badge"] = badge_flag
+
+        for session_value, group in grouped_df.groupby("session", dropna=False):
+            label = ""
+            if pd.notna(session_value):
+                label = str(session_value).strip()
+            if not label:
+                label = selected.strftime("%A")
+
+            group_complete = int(
+                (
+                    (group["_attended"] == 1)
+                    & (group["_fees"] == 1)
+                    & (group["_bg"] == 1)
+                    & (group["_badge"] == 1)
+                ).sum()
+            )
+            group_total = int(len(group.index))
+            group_to_action = max(0, group_total - group_complete)
+            group_pct = int(round((group_complete / group_total) * 100)) if group_total else 0
+            session_totals.append(
+                {
+                    "label": label,
+                    "total": group_total,
+                    "complete": group_complete,
+                    "to_action": group_to_action,
+                    "pct": group_pct,
+                }
+            )
 
     return render_template(
         "day.html",
         data=day_df,
+        day_stats=day_stats,
+        session_totals=session_totals,
         selected_date=selected,
         prev_date=(selected - timedelta(days=1)),
         next_date=(selected + timedelta(days=1)),
@@ -2256,7 +2896,7 @@ def add_leaver():
 def admin_tasks():
     today_dt = date.today()
     today_iso = today_dt.isoformat()
-    cutoff_iso = (today_dt - timedelta(days=62)).isoformat()
+    cutoff_iso = three_month_cutoff_date(today_dt).isoformat()
     month_key = today_dt.strftime("%Y-%m")
     month_label = today_dt.strftime("%B %Y")
     user = current_user()
@@ -2489,13 +3129,29 @@ def account_settings():
             flash("Password updated.", "success")
             return redirect(url_for("account_settings"))
 
+        if action == "email_prefs":
+            weekly_opt_in = 1 if request.form.get("weekly_report_opt_in") == "1" else 0
+            db.execute(
+                "UPDATE users SET email_weekly_reports=? WHERE id=?",
+                (weekly_opt_in, user["id"]),
+            )
+            db.commit()
+            log_audit(
+                "update_email_prefs",
+                entity_type="user",
+                entity_id=user["id"],
+                details=f"weekly_report_opt_in={weekly_opt_in}",
+            )
+            if email_owner_only_mode() and user.get("username", "").lower() != OWNER_EMAIL:
+                flash("Saved. Owner-only mode is active, so weekly emails still only go to owner.", "warning")
+            else:
+                flash("Email preferences updated.", "success")
+            return redirect(url_for("account_settings"))
+
         if action == "admin_days":
-            selected_values = request.form.getlist("admin_days")
+            selected_values = parse_admin_day_values(request.form.getlist("admin_days"))
             db.execute("DELETE FROM user_admin_days WHERE user_id=?", (user["id"],))
-            for value in selected_values:
-                if "|" not in value:
-                    continue
-                day_name, programme = value.split("|", 1)
+            for day_name, programme in selected_values:
                 db.execute("""
                     INSERT OR IGNORE INTO user_admin_days (user_id, day_name, programme)
                     VALUES (?, ?, ?)
@@ -2510,43 +3166,16 @@ def account_settings():
             flash("Admin day ownership updated.", "success")
             return redirect(url_for("account_settings"))
 
-        if action == "import_now":
-            rc, _ = run_import_process(trigger="account")
-            log_audit(
-                "run_import",
-                entity_type="system",
-                entity_id="manual",
-                details=f"Import trigger=account rc={rc}",
-                status="ok" if rc == 0 else "warn",
-            )
-            if rc == 0:
-                flash("Import completed.", "success")
-            else:
-                flash("Import failed. Check import log.", "danger")
-            return redirect(url_for("account_settings"))
-
     selected_set = {
         f"{r['day_name']}|{r['programme']}"
         for r in db.execute(
             "SELECT day_name, programme FROM user_admin_days WHERE user_id=?",
             (user["id"],)
         ).fetchall()
+        if admin_day_cell_allowed(r["day_name"], r["programme"])
     }
 
-    days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-    programmes = ["preschool", "honley", "lockwood"]
-    grouped_options = []
-    for day_name in days:
-        grouped_options.append({
-            "day_name": day_name,
-            "cells": [
-                {
-                    "programme": programme,
-                    "value": f"{day_name}|{programme}"
-                }
-                for programme in programmes
-            ]
-        })
+    grouped_options = build_admin_day_grouped_options()
 
     full_name_parts = (user.get("full_name") or "").strip().split()
     first_name = full_name_parts[0] if full_name_parts else ""
@@ -2557,6 +3186,7 @@ def account_settings():
         user=user,
         first_name=first_name,
         last_name=last_name,
+        weekly_report_opt_in=bool(user.get("email_weekly_reports")),
         selected_set=selected_set,
         grouped_options=grouped_options,
         last_import=load_last_import_data()
@@ -2575,18 +3205,13 @@ def account_admin():
             full_name = request.form.get("full_name", "").strip()
             username = request.form.get("username", "").strip().lower()
             role = request.form.get("role", "staff").strip().lower()
-            password = request.form.get("password", "")
-            selected_values = request.form.getlist("admin_days")
+            selected_values = parse_admin_day_values(request.form.getlist("admin_days"))
 
             if not full_name or not username:
                 flash("Name and email are required.", "warning")
                 return redirect(url_for("account_admin"))
             if role not in {"admin", "staff"}:
                 role = "staff"
-            password_errors = password_strength_errors(password)
-            if password_errors:
-                flash("Password " + "; ".join(password_errors) + ".", "warning")
-                return redirect(url_for("account_admin"))
 
             existing = db.execute(
                 "SELECT id FROM users WHERE username=?",
@@ -2596,18 +3221,14 @@ def account_admin():
                 flash("That email is already used by another account.", "warning")
                 return redirect(url_for("account_admin"))
 
+            temporary_password = secrets.token_urlsafe(10)
             db.execute("""
                 INSERT INTO users (username, password_hash, full_name, role, password_must_change)
                 VALUES (?, ?, ?, ?, 1)
-            """, (username, generate_password_hash(password), full_name, role))
+            """, (username, generate_password_hash(temporary_password), full_name, role))
             target_user_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
 
-            for value in selected_values:
-                if "|" not in value:
-                    continue
-                day_name, programme = value.split("|", 1)
-                if day_name not in DAY_ORDER or programme not in {"preschool", "honley", "lockwood"}:
-                    continue
+            for day_name, programme in selected_values:
                 db.execute("""
                     INSERT OR IGNORE INTO user_admin_days (user_id, day_name, programme)
                     VALUES (?, ?, ?)
@@ -2619,7 +3240,10 @@ def account_admin():
                 entity_id=target_user_id,
                 details=f"Created account {username} role={role} admin_days={len(selected_values)}",
             )
-            flash(f"Created account: {username}", "success")
+            flash(
+                f"Created account: {username}. Temporary password is {temporary_password}",
+                "success",
+            )
             return redirect(url_for("account_admin"))
 
         user_id_raw = request.form.get("user_id", "").strip()
@@ -2673,7 +3297,7 @@ def account_admin():
             username = request.form.get("username", "").strip().lower()
             role = request.form.get("role", "staff").strip().lower()
             new_password = request.form.get("new_password", "")
-            selected_values = request.form.getlist("admin_days")
+            selected_values = parse_admin_day_values(request.form.getlist("admin_days"))
 
             if not full_name or not username:
                 flash("Name and email are required.", "warning")
@@ -2724,12 +3348,7 @@ def account_admin():
                 )
 
             db.execute("DELETE FROM user_admin_days WHERE user_id=?", (target_user_id,))
-            for value in selected_values:
-                if "|" not in value:
-                    continue
-                day_name, programme = value.split("|", 1)
-                if day_name not in DAY_ORDER or programme not in {"preschool", "honley", "lockwood"}:
-                    continue
+            for day_name, programme in selected_values:
                 db.execute("""
                     INSERT OR IGNORE INTO user_admin_days (user_id, day_name, programme)
                     VALUES (?, ?, ?)
@@ -2758,7 +3377,7 @@ def account_admin():
         LIMIT 500
     """).fetchall()
     user_rows = db.execute("""
-        SELECT id, username, full_name, role, created_at
+        SELECT id, username, full_name, role, password_must_change, created_at
         FROM users
         ORDER BY username
     """).fetchall()
@@ -2770,20 +3389,11 @@ def account_admin():
     assignment_map = {}
     for row in day_rows:
         key = row["user_id"]
+        if not admin_day_cell_allowed(row["day_name"], row["programme"]):
+            continue
         assignment_map.setdefault(key, set()).add(f"{row['day_name']}|{row['programme']}")
 
-    grouped_options = []
-    for day_name in WEEKDAY_NAMES:
-        grouped_options.append({
-            "day_name": day_name,
-            "cells": [
-                {
-                    "programme": programme,
-                    "value": f"{day_name}|{programme}"
-                }
-                for programme in ("preschool", "honley", "lockwood")
-            ]
-        })
+    grouped_options = build_admin_day_grouped_options()
 
     return render_template(
         "account_admin.html",
@@ -2791,7 +3401,62 @@ def account_admin():
         users=user_rows,
         assignment_map=assignment_map,
         grouped_options=grouped_options,
+        email_enabled=email_enabled(),
+        email_owner_only=email_owner_only_mode(),
+        email_webhook_configured=bool(os.environ.get("TASTERIST_EMAIL_WEBHOOK_URL", "").strip()),
     )
+
+
+def cron_token_valid():
+    expected = os.environ.get("TASTERIST_CRON_TOKEN", "").strip()
+    if not expected:
+        return False
+    provided = (
+        request.headers.get("X-Tasterist-Cron-Token", "").strip()
+        or request.args.get("token", "").strip()
+    )
+    if not provided:
+        return False
+    return secrets.compare_digest(provided, expected)
+
+
+@app.route("/admin/email/weekly-report/send", methods=["POST"])
+@owner_required
+def send_weekly_report_now():
+    try:
+        result = send_weekly_admin_report(trigger="manual")
+    except Exception as exc:
+        flash(f"Weekly report email failed: {exc}", "danger")
+        return redirect(url_for("account_admin"))
+    if result.get("disabled"):
+        flash("Email is disabled. Set TASTERIST_EMAIL_ENABLED=1 to send.", "warning")
+        return redirect(url_for("account_admin"))
+    flash(
+        f"Weekly report email sent to {result['sent']} recipient(s): {', '.join(result['recipients']) or 'none'}",
+        "success",
+    )
+    return redirect(url_for("account_admin"))
+
+
+@app.route("/cron/weekly-admin-report", methods=["POST"])
+def cron_weekly_admin_report():
+    if not cron_token_valid():
+        abort(403)
+    try:
+        result = send_weekly_admin_report(trigger="cron")
+    except Exception as exc:
+        return {
+            "status": "error",
+            "error": str(exc),
+            "time": datetime.now().isoformat(timespec="seconds"),
+        }, 500
+    return {
+        "status": "disabled" if result.get("disabled") else "ok",
+        "sent": result["sent"],
+        "recipients": result["recipients"],
+        "owner_only": result["owner_only"],
+        "time": datetime.now().isoformat(timespec="seconds"),
+    }
 
 
 @app.route("/tasters")
@@ -2935,6 +3600,8 @@ def cloud_preflight():
     db_path = Path(DB_FILE)
     db_parent = db_path.parent
     sheets_path = Path(get_import_source_folder()).expanduser()
+    local_taster_count = get_db().execute("SELECT COUNT(*) c FROM tasters").fetchone()["c"]
+    postgres_url = os.environ.get("DATABASE_URL", "").strip()
 
     def status(ok, ok_label="OK", bad_label="Needs Attention"):
         return ok_label if ok else bad_label
@@ -2953,12 +3620,50 @@ def cloud_preflight():
             "detail": "Either writable existing file or writable parent for first create.",
         },
         {
-            "name": "Taster Sheets Folder",
+            "name": "Import Sheets Folder",
             "path": str(sheets_path),
             "ok": sheets_path.exists() and os.access(sheets_path, os.R_OK),
             "detail": "Folder must be readable in cloud for imports.",
         },
+        {
+            "name": "SQLite Tasters Rows",
+            "path": str(local_taster_count),
+            "ok": int(local_taster_count or 0) > 0,
+            "detail": "Should be non-zero for production dashboard data.",
+        },
+        {
+            "name": "DATABASE_URL",
+            "path": "Configured" if postgres_url else "Missing",
+            "ok": bool(postgres_url),
+            "detail": "Required for Postgres backup/restore operations.",
+        },
     ]
+    if postgres_url:
+        pg_ok = False
+        pg_path = "Unavailable"
+        pg_detail = "Could not query Postgres taster count."
+        try:
+            import psycopg
+
+            with psycopg.connect(postgres_url, connect_timeout=5) as pg_conn:
+                with pg_conn.cursor() as cur:
+                    cur.execute("SELECT COUNT(*) FROM tasters")
+                    pg_count = int(cur.fetchone()[0] or 0)
+            pg_path = str(pg_count)
+            pg_ok = pg_count > 0
+            pg_detail = "Mirror source should be non-zero."
+        except Exception as exc:
+            pg_path = f"Error: {exc}"
+            pg_ok = False
+            pg_detail = "Check DATABASE_URL value, network, and Postgres availability."
+
+        checks.append({
+            "name": "Postgres Tasters Rows",
+            "path": pg_path,
+            "ok": pg_ok,
+            "detail": pg_detail,
+        })
+
     last_import = load_last_import_data() or {}
     import_ok = (last_import.get("exit_code", 0) == 0) if last_import else False
     import_warn = len(last_import.get("warnings", [])) if last_import else 0
@@ -2977,6 +3682,58 @@ def cloud_preflight():
         overall_ok=overall_ok,
         last_import=last_import,
     )
+
+
+@app.route("/cloud/restore-from-postgres", methods=["POST"])
+@admin_required
+def cloud_restore_from_postgres():
+    postgres_url = os.environ.get("DATABASE_URL", "").strip()
+    if not postgres_url:
+        flash("DATABASE_URL is not set; cannot restore from Postgres.", "danger")
+        return redirect(url_for("cloud_preflight"))
+
+    restore_script = os.path.join(BASE_DIR, "scripts", "restore_sqlite_from_postgres.py")
+    if not os.path.exists(restore_script):
+        flash("Restore script is missing in this deploy.", "danger")
+        return redirect(url_for("cloud_preflight"))
+
+    cmd = [
+        sys.executable,
+        restore_script,
+        "--sqlite", DB_FILE,
+        "--postgres-url", postgres_url,
+    ]
+    timeout_raw = os.environ.get("TASTERIST_IMPORT_TIMEOUT_SEC", "120").strip()
+    try:
+        timeout_seconds = max(30, int(timeout_raw))
+    except ValueError:
+        timeout_seconds = 120
+
+    try:
+        close_request_db_if_open()
+        result = subprocess.run(
+            cmd, cwd=BASE_DIR, capture_output=True, text=True, timeout=timeout_seconds
+        )
+        log_parts = []
+        if result.stdout:
+            log_parts.append(result.stdout.strip())
+        if result.stderr:
+            log_parts.append(result.stderr.strip())
+        log_text = "\n\n".join(part for part in log_parts if part).strip() or "(No output captured)"
+        os.makedirs(os.path.dirname(RESTORE_LOG_FILE), exist_ok=True)
+        with open(RESTORE_LOG_FILE, "w", encoding="utf-8") as f:
+            f.write(log_text + "\n")
+        if result.returncode == 0:
+            taster_count = get_db().execute("SELECT COUNT(*) c FROM tasters").fetchone()["c"]
+            flash(f"Restore from Postgres complete. Tasters now: {taster_count}.", "success")
+        else:
+            flash("Restore from Postgres failed. Check preflight and logs.", "warning")
+    except subprocess.TimeoutExpired:
+        flash(f"Restore timed out after {timeout_seconds}s.", "warning")
+    except Exception as exc:
+        flash(f"Restore failed: {exc}", "danger")
+
+    return redirect(url_for("cloud_preflight"))
 
 
 @app.route("/cloud/backup")
@@ -3080,7 +3837,10 @@ def import_upload():
         flash(f"Skipped {skipped} file(s) (invalid or empty filename).", "warning")
 
     if request.form.get("run_after_upload") == "1":
-        replace = request.form.get("replace_all") == "1"
+        replace_requested = request.form.get("replace_all") == "1"
+        replace = replace_requested and destructive_imports_enabled()
+        if replace_requested and not replace:
+            flash("Replace-all import is disabled in this environment.", "warning")
         rc, _ = run_import_process(trigger="upload", replace=replace)
         log_audit(
             "run_import",
@@ -3104,7 +3864,10 @@ def import_run():
         flash("Use the Run Full Import button on the Import page.", "warning")
         return redirect(url_for("import_page"))
 
-    replace = request.form.get("replace_all") == "1"
+    replace_requested = request.form.get("replace_all") == "1"
+    replace = replace_requested and destructive_imports_enabled()
+    if replace_requested and not replace:
+        flash("Replace-all import is disabled in this environment.", "warning")
     rc, _ = run_import_process(trigger="manual", replace=replace)
     log_audit(
         "run_import",
@@ -3139,6 +3902,15 @@ def dev_panel():
 # ==========================================================
 
 init_db()
+maybe_restore_sqlite_from_postgres()
+
+try:
+    _boot_db = sqlite3.connect(DB_FILE)
+    _boot_count = _boot_db.execute("SELECT COUNT(*) FROM tasters").fetchone()[0]
+    _boot_db.close()
+    print(f"🗄️ DB ready: {DB_FILE} | tasters={_boot_count}")
+except Exception as exc:
+    print(f"⚠️ DB startup check failed for {DB_FILE}: {exc}")
 
 if __name__ == "__main__":
     app.run(debug=is_env_true("TASTERIST_DEBUG", "0"), port=8501)

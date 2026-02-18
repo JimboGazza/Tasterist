@@ -19,6 +19,9 @@ import re
 import zipfile
 from openpyxl import load_workbook
 
+BASE_DIR = Path(__file__).resolve().parents[1]
+DEFAULT_DB_PATH = BASE_DIR / "data" / "db" / "tasterist.db"
+
 # --------------------------------------------------
 # CONFIG
 # --------------------------------------------------
@@ -70,7 +73,25 @@ def normalise_time(v):
         return v.strftime("%H:%M")
     if hasattr(v, "hour"):  # datetime.time
         return f"{v.hour:02d}:{v.minute:02d}"
-    return str(v).strip()
+    s = str(v).strip()
+    m = re.match(r"^(\d{1,2}):(\d{2})(?::\d{2})?\s*([ap]m)?$", s, flags=re.IGNORECASE)
+    if not m:
+        return s
+    hour = int(m.group(1))
+    minute = int(m.group(2))
+    meridiem = (m.group(3) or "").lower()
+    if minute > 59:
+        return s
+    if meridiem:
+        if hour < 1 or hour > 12:
+            return s
+        if meridiem == "am":
+            hour = 0 if hour == 12 else hour
+        else:
+            hour = 12 if hour == 12 else hour + 12
+    elif hour > 23:
+        return s
+    return f"{hour:02d}:{minute:02d}"
 
 def normalise_cell_text(v):
     if v is None:
@@ -237,9 +258,9 @@ def import_excel(path, conn):
             out.append(f"{hh + 12:02d}:{mm}")
         return out
 
-    def infer_class_name(programme_key, day_name, start_time, iso_date):
+    def infer_class_details(programme_key, day_name, start_time, iso_date):
         if not start_time:
-            return ""
+            return "", ""
 
         for candidate in time_candidates(start_time):
             row = cur.execute("""
@@ -250,7 +271,7 @@ def import_excel(path, conn):
                 LIMIT 1
             """, (programme_key, iso_date, candidate)).fetchone()
             if row:
-                return row[0] or ""
+                return row[0] or "", candidate
 
         weekday = day_name
         if not weekday:
@@ -268,8 +289,8 @@ def import_excel(path, conn):
                 LIMIT 1
             """, (programme_key, weekday, candidate)).fetchone()
             if row:
-                return row[0] or ""
-        return ""
+                return row[0] or "", candidate
+        return "", start_time
 
     tasters_inserted = 0
     leavers_inserted = 0
@@ -387,13 +408,13 @@ def import_excel(path, conn):
                     continue
 
                 effective_date = parsed or block_state[col]["date"] or sheet_default_date
-                session = block_state[col]["time"] or ""
-                class_name = infer_class_name(
+                class_name, inferred_session = infer_class_details(
                     programme,
                     block_state[col]["day"],
                     block_state[col]["time"],
                     effective_date
                 )
+                session = inferred_session or (block_state[col]["time"] or "")
 
                 note_val = ws.cell(r, notes_col).value if notes_col <= ws.max_column else ""
 
@@ -524,7 +545,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--folder", required=True)
     p.add_argument("--fallback-folder")
-    p.add_argument("--db", default="tasterist.db")
+    p.add_argument("--db", default=str(DEFAULT_DB_PATH))
     p.add_argument("--apply", action="store_true")
     args = p.parse_args()
 

@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#02120d"/>
+      <stop offset="48%" stop-color="#053126"/>
+      <stop offset="100%" stop-color="#041910"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1920" height="1080" fill="url(#bg)"/>
+
+  <g fill="#0a6652" opacity="0.3">
+    <polygon points="0,180 210,0 470,130 310,370"/>
+    <polygon points="400,40 720,0 820,250 510,330"/>
+    <polygon points="760,70 1030,20 1160,250 890,320"/>
+    <polygon points="1060,0 1360,40 1320,300 1080,260"/>
+    <polygon points="1320,40 1650,0 1780,280 1470,330"/>
+    <polygon points="1680,10 1920,120 1900,360 1700,320"/>
+    <polygon points="120,360 430,300 520,620 170,700"/>
+    <polygon points="470,360 860,280 980,640 560,740"/>
+    <polygon points="920,360 1260,290 1340,690 1000,760"/>
+    <polygon points="1280,360 1680,320 1770,730 1380,790"/>
+    <polygon points="1660,380 1920,330 1920,760 1730,760"/>
+    <polygon points="20,710 300,630 420,980 110,1080"/>
+    <polygon points="280,760 680,700 810,1080 430,1080"/>
+    <polygon points="700,790 1130,710 1240,1080 860,1080"/>
+    <polygon points="1110,820 1520,760 1660,1080 1290,1080"/>
+    <polygon points="1500,840 1880,780 1920,1080 1600,1080"/>
+  </g>
+
+  <g fill="#1aa37f" opacity="0.17">
+    <polygon points="170,120 420,80 560,320 290,380"/>
+    <polygon points="610,110 860,150 910,420 640,480"/>
+    <polygon points="980,140 1210,100 1270,390 1020,470"/>
+    <polygon points="1330,120 1610,170 1660,430 1390,500"/>
+    <polygon points="250,500 570,450 640,760 360,810"/>
+    <polygon points="700,500 1010,460 1080,760 790,820"/>
+    <polygon points="1130,520 1450,470 1510,780 1210,830"/>
+    <polygon points="1510,530 1820,500 1860,800 1580,840"/>
+  </g>
+</svg>

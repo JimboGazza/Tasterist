@@ -18,7 +18,7 @@ In your Render web service:
 From Render Shell (or local with network access to Postgres):
 
 ```bash
-python migrate_sqlite_to_postgres.py \
+python scripts/migrate_sqlite_to_postgres.py \
   --sqlite /var/data/tasterist.db \
   --postgres-url "$DATABASE_URL" \
   --truncate-first
@@ -29,7 +29,7 @@ python migrate_sqlite_to_postgres.py \
 For subsequent syncs:
 
 ```bash
-python migrate_sqlite_to_postgres.py \
+python scripts/migrate_sqlite_to_postgres.py \
   --sqlite /var/data/tasterist.db \
   --postgres-url "$DATABASE_URL"
 ```
@@ -49,4 +49,3 @@ Check logs from the script output for table counts:
 
 Phase 1 centralizes backup/state in Postgres, but the Flask app still reads/writes SQLite.
 Phase 2 is switching app runtime to Postgres as the primary DB.
-

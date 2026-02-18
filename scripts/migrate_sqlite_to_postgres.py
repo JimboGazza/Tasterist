@@ -3,15 +3,19 @@
 Migrate/sync Tasterist data from SQLite to Postgres.
 
 Usage:
-  python migrate_sqlite_to_postgres.py --sqlite /var/data/tasterist.db --postgres-url "$DATABASE_URL" --truncate-first
+  python scripts/migrate_sqlite_to_postgres.py --sqlite /var/data/tasterist.db --postgres-url "$DATABASE_URL" --truncate-first
 """
 
 import argparse
 import os
 import sqlite3
+from pathlib import Path
 from typing import Iterable, Sequence
 
 import psycopg
+
+BASE_DIR = Path(__file__).resolve().parents[1]
+DEFAULT_SQLITE_PATH = BASE_DIR / "data" / "db" / "tasterist.db"
 
 
 TABLE_ORDER = (
@@ -178,7 +182,7 @@ def sync_sequence(pg, table_name: str):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--sqlite", default="tasterist.db", help="Path to sqlite db file")
+    parser.add_argument("--sqlite", default=str(DEFAULT_SQLITE_PATH), help="Path to sqlite db file")
     parser.add_argument(
         "--postgres-url",
         default=os.environ.get("DATABASE_URL", ""),
@@ -218,4 +222,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

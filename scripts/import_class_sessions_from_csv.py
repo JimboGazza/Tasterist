@@ -13,8 +13,13 @@ Supports both legacy and current CSV column names:
 import argparse
 import csv
 import sqlite3
+from pathlib import Path
 
 import pandas as pd
+
+BASE_DIR = Path(__file__).resolve().parents[1]
+DEFAULT_DB_PATH = BASE_DIR / "data" / "db" / "tasterist.db"
+DEFAULT_CSV_PATH = BASE_DIR / "data" / "archive" / "Events_from_19_Jan_2026_to_25_Jan_2026-2.csv"
 
 
 def pick_column(columns, candidates):
@@ -65,12 +70,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--csv",
-        default="Events_from_19_Jan_2026_to_25_Jan_2026-2.csv",
+        default=str(DEFAULT_CSV_PATH),
         help="Path to bookings CSV",
     )
     parser.add_argument(
         "--db",
-        default="tasterist.db",
+        default=str(DEFAULT_DB_PATH),
         help="Path to SQLite database",
     )
     parser.add_argument(

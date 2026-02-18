@@ -14,6 +14,10 @@
     <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
       <h5 class="mb-0">Overall</h5>
       <div class="d-flex align-items-center gap-2">
+        <form method="post" action="{{ url_for('cloud_restore_from_postgres') }}" class="d-inline">
+          {{ csrf_field() }}
+          <button type="submit" class="btn btn-green btn-sm">Restore DB From Postgres</button>
+        </form>
         <a href="{{ url_for('cloud_backup') }}" class="btn btn-glass btn-sm">Download DB Backup</a>
         <span class="monitor-pill {% if overall_ok %}monitor-ok{% else %}monitor-warn{% endif %}">
           {% if overall_ok %}Ready{% else %}Needs Attention{% endif %}

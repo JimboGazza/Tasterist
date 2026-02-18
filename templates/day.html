@@ -107,6 +107,55 @@
   </div>
   {% endfor %}
 
+  <div class="day-bottom-grid mt-4">
+    <section class="dashboard-card day-summary-card">
+      <h5 class="mb-3">Day Snapshot</h5>
+      <div class="day-kpi-grid">
+        <div class="day-kpi">
+          <div class="day-kpi-label">Total</div>
+          <div class="day-kpi-value">{{ day_stats.total }}</div>
+        </div>
+        <div class="day-kpi">
+          <div class="day-kpi-label">To Action</div>
+          <div class="day-kpi-value is-warn">{{ day_stats.to_action }}</div>
+        </div>
+        <div class="day-kpi">
+          <div class="day-kpi-label">Fully Complete</div>
+          <div class="day-kpi-value is-good">{{ day_stats.fully_complete }}</div>
+        </div>
+      </div>
+      <div class="day-checkline mt-3">
+        <span>Attended {{ day_stats.attended }}/{{ day_stats.total }}</span>
+        <span>Club Fees {{ day_stats.club_fees }}/{{ day_stats.total }}</span>
+        <span>BG {{ day_stats.bg }}/{{ day_stats.total }}</span>
+        <span>Badge {{ day_stats.badge }}/{{ day_stats.total }}</span>
+      </div>
+    </section>
+
+    <section class="dashboard-card day-progress-card">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <h5 class="mb-0">Session Progress</h5>
+        <span class="dashboard-chip">{{ day_stats.completion_pct }}% complete</span>
+      </div>
+      <div class="day-progress-list">
+        {% for s in session_totals %}
+        <div class="day-progress-row">
+          <div class="day-progress-head">
+            <span class="day-progress-name">{{ s.label }}</span>
+            <span class="day-progress-count">{{ s.complete }}/{{ s.total }} complete</span>
+          </div>
+          <div class="day-progress-bar-track">
+            <div class="day-progress-bar-fill" style="width: {{ s.pct }}%;"></div>
+          </div>
+          {% if s.to_action > 0 %}
+          <div class="day-progress-note">{{ s.to_action }} to action</div>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+    </section>
+  </div>
+
 {% endif %}
 
 {% endblock %}

@@ -56,10 +56,14 @@
         {% for row in grouped_options %}
           <div class="admin-days-day">{{ row.day_name }}</div>
           {% for cell in row.cells %}
+            {% if cell.visible %}
             <label class="admin-days-cell admin-days-btn">
               <input class="admin-days-input" type="checkbox" name="admin_days" value="{{ cell.value }}" {% if cell.value in selected_set %}checked{% endif %}>
               <span class="admin-days-hit"></span>
             </label>
+            {% else %}
+            <span class="admin-days-empty" aria-hidden="true"></span>
+            {% endif %}
           {% endfor %}
         {% endfor %}
       </div>
@@ -86,6 +90,22 @@
       </div>
       <button type="submit" class="btn btn-green">Update Password</button>
     </form>
+    <form method="post" class="dashboard-card">
+      {{ csrf_field() }}
+      <input type="hidden" name="action" value="email_prefs">
+      <h5 class="mb-2">Email Preferences</h5>
+      <label class="form-check mb-2">
+        <input class="form-check-input" type="checkbox" name="weekly_report_opt_in" value="1" {% if weekly_report_opt_in %}checked{% endif %}>
+        <span class="form-check-label">Receive weekly admin summary emails</span>
+      </label>
+      {% if email_owner_only_mode and not is_owner_user %}
+      <p class="dashboard-subtle mb-2">Owner-only mode is active, so weekly reports currently only send to the owner account.</p>
+      {% endif %}
+      <button type="submit" class="btn btn-green btn-sm">Save Email Preferences</button>
+    </form>
+  </div>
+
+  <div class="account-grid mb-4">
     <div class="dashboard-card">
       <h5 class="mb-2">Import Management</h5>
       <p class="dashboard-subtle mb-2">Workbook uploads and full imports are managed in Admin Console.</p>

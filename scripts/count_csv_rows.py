@@ -9,6 +9,8 @@ from pathlib import Path
 import csv
 import re
 
+BASE_DIR = Path(__file__).resolve().parents[1]
+
 
 def looks_like_name(value: str) -> bool:
     # Broad filter: starts with a letter and is not a common header token.
@@ -65,7 +67,7 @@ def count_csv(path: Path) -> int:
 
 
 def main():
-    root = Path("csv_exports").resolve()
+    root = (BASE_DIR / "data" / "exports").resolve()
 
     if not root.exists():
         raise SystemExit(f"Folder not found: {root}")
