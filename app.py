@@ -848,7 +848,7 @@ def load_import_meta():
 
 
 def should_run_login_import():
-    enabled = os.environ.get("TASTERIST_LOGIN_IMPORT_ENABLED", "1").strip().lower()
+    enabled = os.environ.get("TASTERIST_LOGIN_IMPORT_ENABLED", "0").strip().lower()
     if enabled not in {"1", "true", "yes", "on"}:
         return False
 
@@ -885,8 +885,10 @@ def run_import_process(trigger="manual"):
         "import_taster_sheets.py",
         "--folder", import_source,
         "--db", DB_FILE,
-        "--apply"
     ]
+    # Never full-refresh on opportunistic login runs.
+    if trigger in {"manual", "account", "upload"}:
+        cmd.append("--apply")
     if os.path.isdir(local_fallback):
         cmd.extend(["--fallback-folder", local_fallback])
     try:

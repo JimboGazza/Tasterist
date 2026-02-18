@@ -571,11 +571,47 @@ def main():
         f for f in sorted(root.rglob("*.xlsx"))
         if not f.name.startswith("~$") and is_supported_workbook(f.name)
     ]
-    if not candidate_files:
-        raise SystemExit(f"❌ No supported workbook files found in: {root}")
 
     print(f"\n📂 Importing from OneDrive path:")
     print(f"   {root}\n")
+
+    fallback_lookup = {}
+    fallback_candidates = []
+    if args.fallback_folder:
+        fallback_root = Path(args.fallback_folder).expanduser().resolve()
+        if fallback_root.exists():
+            for fb in sorted(fallback_root.rglob("*.xlsx")):
+                if fb.name.startswith("~$"):
+                    continue
+                if is_supported_workbook(fb.name):
+                    fallback_candidates.append(fb)
+                fallback_lookup.setdefault(fb.name.lower(), fb)
+
+    if not candidate_files and fallback_candidates:
+        print("ℹ️ No supported files in primary folder; using local fallback folder files.")
+        candidate_files = fallback_candidates
+
+    if not candidate_files:
+        raise SystemExit(f"❌ No supported workbook files found in: {root}")
+
+    readable_targets = []
+    for file in candidate_files:
+        import_path = file
+        try:
+            if not zipfile.is_zipfile(file):
+                fallback = fallback_lookup.get(file.name.lower())
+                if fallback and zipfile.is_zipfile(fallback):
+                    readable_targets.append((file, fallback, True))
+                else:
+                    print(f"⚠️ SKIP (invalid or not fully downloaded .xlsx): {file}")
+            else:
+                readable_targets.append((file, import_path, False))
+        except (TimeoutError, OSError, zipfile.BadZipFile) as exc:
+            print(f"⚠️ SKIP (unreadable workbook): {file}")
+            continue
+
+    if not readable_targets:
+        raise SystemExit("❌ No readable workbook files found; import aborted without clearing data.")
 
     if args.apply:
         print("\n🔥 Clearing tables")
@@ -584,41 +620,17 @@ def main():
         conn.commit()
 
     total_t = total_l = 0
-
-    fallback_lookup = {}
-    if args.fallback_folder:
-        fallback_root = Path(args.fallback_folder).expanduser().resolve()
-        if fallback_root.exists():
-            for fb in sorted(fallback_root.rglob("*.xlsx")):
-                if fb.name.startswith("~$"):
-                    continue
-                fallback_lookup.setdefault(fb.name.lower(), fb)
-
-    for file in candidate_files:
+    for file, import_path, used_fallback in readable_targets:
         try:
-            # OneDrive placeholder/unavailable files can fail with timeout or bad zip.
-            import_path = file
-            if not zipfile.is_zipfile(file):
-                fallback = fallback_lookup.get(file.name.lower())
-                if fallback and zipfile.is_zipfile(fallback):
-                    print(f"ℹ️ Using local fallback: {file.name}")
-                    import_path = fallback
-                else:
-                    print(f"⚠️ SKIP (invalid or not fully downloaded .xlsx): {file}")
-                    continue
-
+            if used_fallback:
+                print(f"ℹ️ Using local fallback: {file.name}")
             t, l = import_excel(import_path, conn)
             total_t += t
             total_l += l
-        except (TimeoutError, OSError, zipfile.BadZipFile) as exc:
-            print(f"⚠️ SKIP (unreadable workbook): {file}")
-            print(f"   ↳ {exc.__class__.__name__}: {exc}")
-            continue
         except Exception as exc:
             print(f"⚠️ SKIP (unexpected import error): {file}")
             print(f"   ↳ {exc.__class__.__name__}: {exc}")
             continue
-
 
     conn.commit()
     conn.close()
