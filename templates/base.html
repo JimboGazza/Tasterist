@@ -92,51 +92,54 @@
       </div>
 
       <!-- PUSH DEV TO BOTTOM -->
-      <div class="mt-auto pt-3 border-top">
-        {% if current_user %}
-        <div class="dropdown dropup mb-2">
-          <button class="sidebar-account sidebar-account-btn w-100" type="button" data-bs-toggle="dropdown" aria-expanded="false">
-            <div class="sidebar-avatar">{{ user_initials(current_user.full_name or current_user.username) }}</div>
-            <div class="sidebar-account-text">
-              <div class="sidebar-account-name">{{ current_user.full_name or current_user.username }}</div>
-              <div class="sidebar-account-email">{{ current_user.username }}</div>
+      <div class="mt-auto">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            <div class="sidebar-flash-stack" role="status" aria-live="polite">
+              {% for category, msg in messages %}
+                <div class="alert alert-{{ category }} sidebar-flash-alert">
+                  {{ msg }}
+                </div>
+              {% endfor %}
             </div>
-          </button>
-          <div class="dropdown-menu dropdown-menu-dark w-100 p-2">
-            <a class="dropdown-item" href="{{ url_for('account_settings') }}">
-              <i class="bi bi-person-circle nav-ico"></i> Account Settings
-            </a>
-            {% if is_owner_user %}
-            <a class="dropdown-item" href="{{ url_for('account_admin') }}">
-              <i class="bi bi-shield-lock nav-ico"></i> Admin Console
-            </a>
-            {% endif %}
-            <form method="post" action="{{ url_for('logout') }}" class="mt-2">
-              {{ csrf_field() }}
-              <button type="submit" class="btn btn-glass btn-sm w-100">
-                <i class="bi bi-box-arrow-right nav-ico"></i> Sign Out
-              </button>
-            </form>
-          </div>
-        </div>
-        {% endif %}
+          {% endif %}
+        {% endwith %}
 
+        <div class="pt-3 border-top">
+          {% if current_user %}
+          <div class="dropdown dropup mb-2">
+            <button class="sidebar-account sidebar-account-btn w-100" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+              <div class="sidebar-avatar">{{ user_initials(current_user.full_name or current_user.username) }}</div>
+              <div class="sidebar-account-text">
+                <div class="sidebar-account-name">{{ current_user.full_name or current_user.username }}</div>
+                <div class="sidebar-account-email">{{ current_user.username }}</div>
+              </div>
+            </button>
+            <div class="dropdown-menu dropdown-menu-dark w-100 p-2">
+              <a class="dropdown-item" href="{{ url_for('account_settings') }}">
+                <i class="bi bi-person-circle nav-ico"></i> Account Settings
+              </a>
+              {% if is_owner_user %}
+              <a class="dropdown-item" href="{{ url_for('account_admin') }}">
+                <i class="bi bi-shield-lock nav-ico"></i> Admin Console
+              </a>
+              {% endif %}
+              <form method="post" action="{{ url_for('logout') }}" class="mt-2">
+                {{ csrf_field() }}
+                <button type="submit" class="btn btn-glass btn-sm w-100">
+                  <i class="bi bi-box-arrow-right nav-ico"></i> Sign Out
+                </button>
+              </form>
+            </div>
+          </div>
+          {% endif %}
+        </div>
       </div>
 
     </aside>
 
     <!-- MAIN CONTENT -->
     <main class="col-12 col-md-10 col-lg-10 main main-col p-4">
-
-      {% with messages = get_flashed_messages(with_categories=true) %}
-        {% if messages %}
-          {% for category, msg in messages %}
-            <div class="alert alert-{{ category }} mb-3">
-              {{ msg }}
-            </div>
-          {% endfor %}
-        {% endif %}
-      {% endwith %}
 
       {% block content %}{% endblock %}
 

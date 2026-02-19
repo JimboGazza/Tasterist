@@ -2255,7 +2255,8 @@ def run_late_night_time_fix(force=False):
 
 
 def maybe_auto_fix_pm_times():
-    if not is_env_true("TASTERIST_AUTO_FIX_PM_TIMES", "1"):
+    default_enabled = "0" if USING_POSTGRES else "1"
+    if not is_env_true("TASTERIST_AUTO_FIX_PM_TIMES", default_enabled):
         return
     try:
         result = run_pm_time_fix(force=False, include_preschool=False)
@@ -2270,7 +2271,8 @@ def maybe_auto_fix_pm_times():
 
 
 def maybe_auto_fix_late_night_times():
-    if not is_env_true("TASTERIST_AUTO_FIX_LATE_NIGHT_TIMES", "1"):
+    default_enabled = "0" if USING_POSTGRES else "1"
+    if not is_env_true("TASTERIST_AUTO_FIX_LATE_NIGHT_TIMES", default_enabled):
         return
     try:
         result = run_late_night_time_fix(force=False)
@@ -3975,8 +3977,9 @@ def account_settings():
             db.execute("DELETE FROM user_admin_days WHERE user_id=?", (user["id"],))
             for day_name, programme in selected_values:
                 db.execute("""
-                    INSERT OR IGNORE INTO user_admin_days (user_id, day_name, programme)
+                    INSERT INTO user_admin_days (user_id, day_name, programme)
                     VALUES (?, ?, ?)
+                    ON CONFLICT(user_id, day_name, programme) DO NOTHING
                 """, (user["id"], day_name, programme))
             db.commit()
             log_audit(
@@ -4053,8 +4056,9 @@ def account_admin():
 
             for day_name, programme in selected_values:
                 db.execute("""
-                    INSERT OR IGNORE INTO user_admin_days (user_id, day_name, programme)
+                    INSERT INTO user_admin_days (user_id, day_name, programme)
                     VALUES (?, ?, ?)
+                    ON CONFLICT(user_id, day_name, programme) DO NOTHING
                 """, (target_user_id, day_name, programme))
             db.commit()
             log_audit(
@@ -4174,8 +4178,9 @@ def account_admin():
             db.execute("DELETE FROM user_admin_days WHERE user_id=?", (target_user_id,))
             for day_name, programme in selected_values:
                 db.execute("""
-                    INSERT OR IGNORE INTO user_admin_days (user_id, day_name, programme)
+                    INSERT INTO user_admin_days (user_id, day_name, programme)
                     VALUES (?, ?, ?)
+                    ON CONFLICT(user_id, day_name, programme) DO NOTHING
                 """, (target_user_id, day_name, programme))
 
             db.commit()
@@ -4933,6 +4938,9 @@ maybe_auto_fix_pm_times()
 maybe_auto_fix_late_night_times()
 
 try:
+    _build_commit = os.environ.get("RENDER_GIT_COMMIT", "").strip()
+    if _build_commit:
+        print(f"🏷️ Build commit: {_build_commit[:7]}")
     _boot_db = open_db_connection()
     _boot_count = _boot_db.execute("SELECT COUNT(*) FROM tasters").fetchone()[0]
     _boot_db.close()

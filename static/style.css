@@ -862,6 +862,42 @@ body.login-page {
   border: 1px solid #dc2626;
 }
 
+.alert-info {
+  background: #10354b;
+  color: #cfefff;
+  border: 1px solid #2b78a5;
+}
+
+.sidebar-flash-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+  max-height: 210px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.sidebar-flash-alert {
+  border-radius: 10px;
+  box-shadow: 0 7px 18px rgba(0, 0, 0, 0.3);
+  font-size: 0.82rem;
+  margin: 0;
+  padding: 0.55rem 0.65rem;
+  animation: sidebarFlashRise 0.2s ease-out;
+}
+
+@keyframes sidebarFlashRise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 /* ---------- IMPORT PAGE ---------- */
 
 .import-page {
@@ -2141,5 +2177,9 @@ code {
   }
   .find-filters {
     position: static;
+  }
+  .sidebar-flash-stack {
+    max-height: none;
+    overflow-y: visible;
   }
 }
