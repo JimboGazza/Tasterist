@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="add-page">
+  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+    <div>
+      <h2 class="text-white mb-1">Add Manual Leaver</h2>
+      <p class="text-white mb-0">Record a leaver with fully editable class title and session details.</p>
+    </div>
+    <div class="btn-group">
+      <a href="{{ url_for('add_manual_leaver', programme='lockwood', week_start=week_start.isoformat()) }}"
+          class="btn btn-sm {% if programme=='lockwood' %}btn-green{% else %}btn-glass{% endif %}">
+        Lockwood
+      </a>
+      <a href="{{ url_for('add_manual_leaver', programme='honley', week_start=week_start.isoformat()) }}"
+          class="btn btn-sm {% if programme=='honley' %}btn-green{% else %}btn-glass{% endif %}">
+        Honley
+      </a>
+      <a href="{{ url_for('add_manual_leaver', programme='preschool', week_start=week_start.isoformat()) }}"
+          class="btn btn-sm {% if programme=='preschool' %}btn-green{% else %}btn-glass{% endif %}">
+        Preschool
+      </a>
+    </div>
+  </div>
+
+  <div class="d-flex gap-2 mb-3">
+    <a href="{{ url_for('add_leaver', programme=programme, week_start=week_start.isoformat()) }}" class="btn btn-glass">Back To Class Picker</a>
+  </div>
+
+  <div class="card-form add-taster-panel">
+    <form method="post">
+      {{ csrf_field() }}
+      <input type="hidden" name="programme" value="{{ programme }}">
+
+      <div class="mb-3">
+        <label class="form-label">Child Name</label>
+        <input name="child" class="form-control" required>
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label">Leave Date</label>
+        <input type="date" name="leave_date" class="form-control" value="{{ today_str }}" required>
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label">Class Day (Optional)</label>
+        <select name="class_day" class="form-select">
+          <option value="">Auto from session/date</option>
+          <option>Monday</option>
+          <option>Tuesday</option>
+          <option>Wednesday</option>
+          <option>Thursday</option>
+          <option>Friday</option>
+          <option>Saturday</option>
+          <option>Sunday</option>
+        </select>
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label">Class Title</label>
+        <input name="class_name" class="form-control" value="Manual Session" required>
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label">Session Label / Time</label>
+        <input name="session_label" class="form-control" placeholder="e.g. 18:00 or Thursday 18:00" required>
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label">Parent Email (optional)</label>
+        <input name="email" class="form-control" type="email" placeholder="name@example.com">
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label">Leaver Checklist</label>
+        <label class="form-check mb-2">
+          <input class="form-check-input" type="checkbox" name="removed_la" value="1">
+          <span class="form-check-label">Made Inactive (Removed from LA)</span>
+        </label>
+        <label class="form-check mb-2">
+          <input class="form-check-input" type="checkbox" name="removed_bg" value="1">
+          <span class="form-check-label">Removed from BG</span>
+        </label>
+        <label class="form-check">
+          <input class="form-check-input" type="checkbox" name="added_to_board" value="1">
+          <span class="form-check-label">Added to Leavers Board</span>
+        </label>
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label">Reason for Leaving</label>
+        <input name="reason" class="form-control" placeholder="Optional reason">
+      </div>
+
+      <button class="btn btn-green w-100">Save Manual Leaver</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

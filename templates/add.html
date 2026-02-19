@@ -62,9 +62,9 @@
     </div>
   </div>
 
-  <button id="manualSelectBtn" type="button" class="btn btn-glass mb-3">
-    Add Manual Session Instead
-  </button>
+  <a href="{{ url_for('add_manual_taster', programme=programme, week_start=week_start.isoformat()) }}" class="btn btn-glass mb-3">
+    Add Manual Session (Separate Screen)
+  </a>
 
   <div id="addTasterPanel" class="card-form add-taster-panel d-none">
     <div class="selected-session-box mb-3">
@@ -87,20 +87,10 @@
         <input id="sessionDateInput" type="date" name="taster_date" class="form-control" required>
       </div>
 
-      <div id="manualSessionWrap" class="mb-3 d-none">
-        <label class="form-label">Manual Session</label>
-        <input id="manualSessionInput" name="manual_session" class="form-control" placeholder="e.g. Tuesday 16:00">
-      </div>
-
       <div class="mb-3">
         <label class="form-label">Notes (Optional)</label>
         <textarea name="notes" class="form-control" rows="2"></textarea>
       </div>
-
-      <label class="form-check mb-3">
-        <input class="form-check-input" type="checkbox" name="sync_excel" value="1" checked>
-        <span class="form-check-label">Also write this update to the OneDrive Excel sheet</span>
-      </label>
 
       <button class="btn btn-green w-100">Save Taster</button>
     </form>
@@ -114,12 +104,8 @@ const tiles = Array.from(document.querySelectorAll(".session-tile"));
 const sessionValueInput = document.getElementById("sessionValueInput");
 const classNameInput = document.getElementById("classNameInput");
 const sessionDateInput = document.getElementById("sessionDateInput");
-const manualWrap = document.getElementById("manualSessionWrap");
-const manualInput = document.getElementById("manualSessionInput");
 const selectedTitle = document.getElementById("selectedSessionTitle");
 const selectedMeta = document.getElementById("selectedSessionMeta");
-const manualSelectBtn = document.getElementById("manualSelectBtn");
-const defaultManualDate = "{{ today_str }}";
 
 function showPanel() {
   panel.classList.remove("d-none");
@@ -137,9 +123,6 @@ function selectClass(tile) {
   classNameInput.value = className;
   sessionDateInput.value = dateStr;
   sessionDateInput.readOnly = true;
-  manualWrap.classList.add("d-none");
-  manualInput.required = false;
-  manualInput.value = "";
 
   selectedTitle.textContent = className;
   selectedMeta.textContent = `${dateStr} • ${timeRange}`;
@@ -148,27 +131,9 @@ function selectClass(tile) {
   tile.classList.add("active");
 }
 
-function selectManual() {
-  showPanel();
-  weekPickerWrap.classList.remove("d-none");
-  sessionValueInput.value = "__manual__";
-  classNameInput.value = "Manual Session";
-  sessionDateInput.readOnly = false;
-  if (!sessionDateInput.value) {
-    sessionDateInput.value = defaultManualDate;
-  }
-  manualWrap.classList.remove("d-none");
-  manualInput.required = true;
-  selectedTitle.textContent = "Manual Session";
-  selectedMeta.textContent = "Enter a custom session label and date.";
-  tiles.forEach((t) => t.classList.remove("active"));
-}
-
 tiles.forEach((tile) => {
   tile.addEventListener("click", () => selectClass(tile));
 });
-
-manualSelectBtn.addEventListener("click", selectManual);
 </script>
 
 {% endblock %}

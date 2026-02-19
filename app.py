@@ -3322,27 +3322,20 @@ def add_leaver():
         session_label = request.form.get("session", "").strip()
         class_day = request.form.get("class_day", "").strip()
         class_name = request.form.get("class_name", "").strip()
-        manual_session = request.form.get("manual_session", "").strip()
         removed_la = 1 if request.form.get("removed_la") == "1" else 0
         removed_bg = 1 if request.form.get("removed_bg") == "1" else 0
         added_to_board = 1 if request.form.get("added_to_board") == "1" else 0
         reason = request.form.get("reason", "").strip()
         email = request.form.get("email", "").strip()
-        sync_excel = request.form.get("sync_excel") == "1"
+        sync_excel = False
 
         if not child or not leave_date:
             flash("Name and leave date are required.", "danger")
             return redirect(request.url)
 
-        if session_label == "__manual__":
-            session_label = normalise_session_label(manual_session)
-            if not class_day:
-                class_day = extract_day_name(manual_session)
-            class_name = class_name or "Manual Session"
-        else:
-            if not class_day:
-                class_day = extract_day_name(session_label)
-            session_label = normalise_session_label(session_label)
+        if not class_day:
+            class_day = extract_day_name(session_label)
+        session_label = normalise_session_label(session_label)
 
         if not session_label:
             flash("Please choose a class/session.", "warning")
@@ -3427,6 +3420,103 @@ def add_leaver():
         prev_week=(week_start - timedelta(days=7)).isoformat(),
         next_week=(week_start + timedelta(days=7)).isoformat(),
         today_str=date.today().isoformat()
+    )
+
+
+@app.route("/leavers/add/manual", methods=["GET", "POST"])
+def add_manual_leaver():
+    programme = request.args.get("programme", "preschool")
+
+    if request.method == "POST":
+        child = normalise_child_name(request.form["child"])
+        programme = request.form.get("programme", programme).strip().lower() or programme
+        leave_date = request.form.get("leave_date", "").strip()
+        class_name = request.form.get("class_name", "").strip() or "Manual Session"
+        class_day = request.form.get("class_day", "").strip()
+        session_label = normalise_session_label(request.form.get("session_label", "").strip())
+        removed_la = 1 if request.form.get("removed_la") == "1" else 0
+        removed_bg = 1 if request.form.get("removed_bg") == "1" else 0
+        added_to_board = 1 if request.form.get("added_to_board") == "1" else 0
+        reason = request.form.get("reason", "").strip()
+        email = request.form.get("email", "").strip()
+        sync_excel = False
+
+        if not child or not leave_date or not session_label:
+            flash("Name, leave date, and session label are required.", "danger")
+            return redirect(request.url)
+
+        try:
+            leave_dt = datetime.fromisoformat(leave_date).date()
+            leave_month = leave_dt.strftime("%Y-%m")
+        except ValueError:
+            flash("Invalid leave date", "danger")
+            return redirect(request.url)
+
+        if not class_day:
+            class_day = extract_day_name(session_label) or leave_dt.strftime("%A")
+
+        db = get_db()
+        db.execute("""
+            INSERT INTO leavers (
+                child, programme, leave_month, leave_date,
+                class_day, session, class_name,
+                removed_la, removed_bg, added_to_board, reason,
+                email, source
+            )
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (
+            child,
+            programme,
+            leave_month,
+            leave_date,
+            class_day,
+            session_label,
+            class_name,
+            removed_la,
+            removed_bg,
+            added_to_board,
+            reason,
+            email,
+            "manual"
+        ))
+        leaver_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.commit()
+
+        inserted = db.execute("SELECT * FROM leavers WHERE id=?", (leaver_id,)).fetchone()
+        actor_initials = user_initials((current_user() or {}).get("full_name", ""))
+        sync_msg = "Excel sync skipped"
+        sync_status = "ok"
+        if sync_excel and inserted:
+            ok, sync_msg = sync_leaver_to_excel(inserted, actor_initials=actor_initials)
+            if not ok:
+                flash(f"Leaver saved in app, but Excel sync needs review: {sync_msg}", "warning")
+                sync_status = "warn"
+
+        log_audit(
+            "add_leaver_manual",
+            entity_type="leaver",
+            entity_id=leaver_id,
+            details=f"{child} | {programme} | {class_day} {session_label} | {leave_date} | excel_sync={sync_msg}",
+            status=sync_status,
+        )
+        flash(f"Manual leaver recorded for {child}", "success")
+        return redirect(url_for("admin_tasks"))
+
+    week_start_raw = request.args.get("week_start") or request.args.get("leave_date")
+    if week_start_raw:
+        try:
+            anchor_date = datetime.fromisoformat(week_start_raw).date()
+        except ValueError:
+            anchor_date = date.today()
+    else:
+        anchor_date = date.today()
+    week_start = anchor_date - timedelta(days=anchor_date.weekday())
+    today_str = date.today().isoformat()
+    return render_template(
+        "add_leaver_manual.html",
+        programme=programme,
+        week_start=week_start,
+        today_str=today_str,
     )
 
 
@@ -4141,17 +4231,12 @@ def add():
         taster_date = request.form["taster_date"]
         session_label = request.form["session"]
         class_name = request.form.get("class_name", "").strip()
-        manual_session = request.form.get("manual_session", "").strip()
         notes = request.form.get("notes", "").strip()
-        sync_excel = request.form.get("sync_excel") == "1"
+        sync_excel = False
 
         if not child or not taster_date:
             flash("Missing fields", "danger")
             return redirect(request.url)
-
-        if session_label == "__manual__":
-            session_label = manual_session
-            class_name = class_name or "Manual Session"
 
         session_label = normalise_session_label(session_label)
 
@@ -4218,6 +4303,78 @@ def add():
         prev_week=(week_start - timedelta(days=7)).isoformat(),
         next_week=(week_start + timedelta(days=7)).isoformat(),
         today_str=date.today().isoformat()
+    )
+
+
+@app.route("/add/manual", methods=["GET", "POST"])
+def add_manual_taster():
+    programme = request.args.get("programme", "lockwood")
+    db = get_db()
+
+    if request.method == "POST":
+        child = normalise_child_name(request.form.get("child", ""))
+        taster_date = request.form.get("taster_date", "").strip()
+        class_name = request.form.get("class_name", "").strip() or "Manual Session"
+        session_label = normalise_session_label(request.form.get("session_label", "").strip())
+        notes = request.form.get("notes", "").strip()
+        sync_excel = False
+
+        if not child or not taster_date or not session_label:
+            flash("Name, date, and session label are required.", "danger")
+            return redirect(request.url)
+
+        db.execute("""
+            INSERT INTO tasters
+            (child, programme, location, session, class_name, taster_date, notes)
+            VALUES (?,?,?,?,?,?,?)
+        """, (
+            child,
+            programme,
+            programme.title(),
+            session_label,
+            class_name,
+            taster_date,
+            notes,
+        ))
+        taster_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.commit()
+
+        inserted = db.execute("SELECT * FROM tasters WHERE id=?", (taster_id,)).fetchone()
+        actor_initials = user_initials((current_user() or {}).get("full_name", ""))
+        sync_msg = "Excel sync skipped"
+        sync_status = "ok"
+        if sync_excel and inserted:
+            ok, sync_msg = sync_taster_to_excel(inserted, mode="add", actor_initials=actor_initials)
+            if not ok:
+                flash(f"Taster saved in app, but Excel sync needs review: {sync_msg}", "warning")
+                sync_status = "warn"
+
+        log_audit(
+            "add_taster_manual",
+            entity_type="taster",
+            entity_id=taster_id,
+            details=f"{child} | {programme} | {taster_date} {session_label} | excel_sync={sync_msg}",
+            status=sync_status,
+        )
+
+        flash(f"Manual taster added for {child}", "success")
+        return redirect(url_for("day_detail", date_str=taster_date, programme=programme))
+
+    week_start_raw = request.args.get("week_start") or request.args.get("taster_date")
+    if week_start_raw:
+        try:
+            anchor_date = datetime.fromisoformat(week_start_raw).date()
+        except ValueError:
+            anchor_date = date.today()
+    else:
+        anchor_date = date.today()
+    week_start = anchor_date - timedelta(days=anchor_date.weekday())
+    today_str = date.today().isoformat()
+    return render_template(
+        "add_manual_taster.html",
+        programme=programme,
+        week_start=week_start,
+        today_str=today_str,
     )
 
 # ==========================================================
