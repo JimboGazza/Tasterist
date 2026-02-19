@@ -17,32 +17,32 @@
   </div>
 
   <div class="dashboard-metrics mb-4">
-    <section class="dashboard-card">
+    <section class="dashboard-card dashboard-card-click" data-href="{{ url_for('month') }}">
       <p class="dashboard-label">Tasters This Month</p>
       <div class="dashboard-value">{{ tasters }}</div>
     </section>
-    <section class="dashboard-card">
+    <section class="dashboard-card dashboard-card-click" data-href="{{ url_for('admin_tasks') }}">
       <p class="dashboard-label">Leavers This Month</p>
       <div class="dashboard-value">{{ leavers }}</div>
     </section>
-    <section class="dashboard-card">
+    <section class="dashboard-card dashboard-card-click" data-href="{{ url_for('stats') }}">
       <p class="dashboard-label">Net Movement</p>
       <div class="dashboard-value {% if net < 0 %}text-danger{% endif %}">
         {% if net >= 0 %}+{% endif %}{{ net }}
       </div>
       <p class="dashboard-subtle mb-0">{{ days_left }} days left this month</p>
     </section>
-    <section class="dashboard-card">
+    <section class="dashboard-card dashboard-card-click" data-href="{{ url_for('admin_tasks') }}">
       <p class="dashboard-label">Open Follow-ups</p>
       <div class="dashboard-value">{{ followups_open }}</div>
       <p class="dashboard-subtle mb-0">From last ~2 months</p>
     </section>
-    <section class="dashboard-card">
+    <section class="dashboard-card dashboard-card-click" data-href="{{ url_for('admin_tasks') }}">
       <p class="dashboard-label">Tasters To Members</p>
       <div class="dashboard-value">{{ converted_month }}</div>
       <p class="dashboard-subtle mb-0">This month complete checks</p>
     </section>
-    <section class="dashboard-card">
+    <section class="dashboard-card dashboard-card-click" data-href="{{ url_for('today') }}">
       <p class="dashboard-label">This Week Bookings</p>
       <div class="dashboard-value">{{ week_bookings }}</div>
       <p class="dashboard-subtle mb-0">{{ week_start.strftime('%d %b') }} - {{ week_end.strftime('%d %b') }}</p>
@@ -59,7 +59,7 @@
     </div>
     <div class="today-programme-grid">
       {% for key, label in [('lockwood','Lockwood'), ('honley','Honley'), ('preschool','Preschool')] %}
-      <section class="today-programme-col">
+      <section class="today-programme-col dashboard-card-click" data-href="{{ url_for('day_detail', date_str=today.isoformat(), programme=key) }}">
         <header class="today-programme-head">
           <span class="today-programme-name">{{ label }}</span>
           <span class="dashboard-chip">{{ todays_counts[key] }}</span>
@@ -85,7 +85,7 @@
   </section>
 
   <div class="dashboard-secondary-grid">
-    <section class="dashboard-card">
+    <section class="dashboard-card dashboard-card-click" data-href="{{ url_for('month') }}">
       <div class="d-flex justify-content-between align-items-center mb-2">
         <h5 class="mb-0">This Month By Programme</h5>
         <span class="dashboard-subtle">Live totals</span>
@@ -106,7 +106,7 @@
     </section>
 
     <div class="dashboard-right-stack">
-      <section class="dashboard-card">
+      <section class="dashboard-card dashboard-card-click" data-href="{{ url_for('add') }}">
         <div class="quick-actions-head mb-3">
           <h5 class="mb-0">Quick Actions</h5>
           <div class="dashboard-clock dashboard-clock-mini">
@@ -121,13 +121,10 @@
         </div>
       </section>
 
-      <section class="dashboard-card monitor-card">
+      <section class="dashboard-card monitor-card dashboard-card-click" data-href="{{ url_for('import_page') if is_admin_user else url_for('account_settings') }}">
         <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
           <h5 class="mb-0">Monitor</h5>
           <div class="d-flex gap-2 align-items-center">
-            {% if is_admin_user %}
-            <a href="{{ url_for('cloud_preflight') }}" class="btn btn-glass btn-sm">Cloud Preflight</a>
-            {% endif %}
             <span class="monitor-pill {{ monitor.class_name }}">{{ monitor.label }}</span>
           </div>
         </div>
@@ -153,6 +150,26 @@ function tickClock() {
 }
 tickClock();
 setInterval(tickClock, 1000);
+
+const clickableCards = Array.from(document.querySelectorAll(".dashboard-card-click[data-href]"));
+function hasInteractiveParent(node) {
+  if (!(node instanceof Element)) return false;
+  return Boolean(node.closest("a, button, form, input, select, textarea, label"));
+}
+clickableCards.forEach((card) => {
+  card.setAttribute("role", "link");
+  card.setAttribute("tabindex", "0");
+  card.addEventListener("click", (event) => {
+    if (hasInteractiveParent(event.target)) return;
+    window.location.href = card.dataset.href;
+  });
+  card.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    if (hasInteractiveParent(event.target)) return;
+    event.preventDefault();
+    window.location.href = card.dataset.href;
+  });
+});
 </script>
 
 {% endblock %}

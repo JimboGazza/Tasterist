@@ -33,10 +33,13 @@
 
     <div class="add-week-grid mb-3">
     {% for day in week_days %}
-    <section class="add-day-column">
+    <section class="add-day-column {% if day.date_str == today_str %}is-today{% endif %}">
       <header class="add-day-header">
         <div class="add-day-name">{{ day.day_name }}</div>
         <div class="add-day-date">{{ day.date_obj.strftime('%d %b %Y') }}</div>
+        {% if day.date_str == today_str %}
+        <div class="add-day-today-badge">Today</div>
+        {% endif %}
       </header>
       <div class="add-day-body">
         {% if day.sessions %}

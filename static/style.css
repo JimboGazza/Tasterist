@@ -152,9 +152,6 @@ body > .container-fluid {
   align-items: center;
   display: flex;
   gap: 8px;
-  isolation: isolate;
-  overflow: hidden;
-  position: relative;
   text-align: left;
   background: linear-gradient(180deg, #153624 0%, #11291b 100%);
   border: 1px solid var(--border-soft);
@@ -162,35 +159,14 @@ body > .container-fluid {
   color: white;
   font-size: 0.84rem;
   padding: 0.38rem 0.5rem;
-  transition:
-    transform 0.2s ease,
-    border-color 0.2s ease,
-    background 0.2s ease,
-    box-shadow 0.2s ease;
+  transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
 }
 
 .nav-btn:hover {
   background: linear-gradient(180deg, #1f4b33 0%, #163826 100%);
   border-color: var(--accent-bright);
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.26);
   color: white;
-  transform: translateY(-2px);
-}
-
-.nav-btn::after {
-  background: linear-gradient(120deg, transparent 0%, rgba(255, 255, 255, 0.28) 48%, transparent 100%);
-  content: "";
-  inset: -140% auto -140% -36%;
-  pointer-events: none;
-  position: absolute;
-  transform: rotate(24deg) translateX(-140%);
-  transition: transform 0.52s ease;
-  width: 34%;
-  z-index: 1;
-}
-
-.nav-btn:hover::after {
-  transform: rotate(24deg) translateX(330%);
+  transform: translateY(-1px);
 }
 
 .nav-ico {
@@ -265,46 +241,14 @@ body > .container-fluid {
 .btn-green,
 .btn-success {
   background: var(--accent);
-  border: none;
   color: white;
-  isolation: isolate;
-  overflow: hidden;
-  position: relative;
-  transition:
-    transform 0.2s ease,
-    box-shadow 0.2s ease,
-    background 0.2s ease;
+  border: none;
 }
 
 .btn-green:hover,
 .btn-success:hover {
   background: var(--accent-hover);
-  box-shadow: 0 8px 20px rgba(13, 70, 39, 0.35);
   color: white;
-  transform: translateY(-1px);
-}
-
-.btn-green:active,
-.btn-success:active {
-  transform: translateY(0);
-}
-
-.btn-green::after,
-.btn-success::after {
-  background: linear-gradient(120deg, transparent 0%, rgba(255, 255, 255, 0.24) 48%, transparent 100%);
-  content: "";
-  inset: -140% auto -140% -36%;
-  pointer-events: none;
-  position: absolute;
-  transform: rotate(24deg) translateX(-140%);
-  transition: transform 0.55s ease;
-  width: 34%;
-  z-index: 1;
-}
-
-.btn-green:hover::after,
-.btn-success:hover::after {
-  transform: rotate(24deg) translateX(320%);
 }
 
 /* ---------- TOGGLE BUTTONS ---------- */
@@ -1129,69 +1073,12 @@ code {
   background: linear-gradient(180deg, #193727 0%, #12291d 100%);
   border: 1px solid #2b5b3c;
   color: #d8fceb;
-  isolation: isolate;
-  overflow: hidden;
-  position: relative;
-  transition:
-    transform 0.2s ease,
-    border-color 0.2s ease,
-    box-shadow 0.2s ease,
-    background 0.2s ease;
 }
 
 .btn-glass:hover {
   background: linear-gradient(180deg, #235236 0%, #173625 100%);
   border-color: #4ade80;
-  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.24);
   color: #ffffff;
-  transform: translateY(-1px);
-}
-
-.btn-glass:active {
-  transform: translateY(0);
-}
-
-.btn-glass::after {
-  background: linear-gradient(120deg, transparent 0%, rgba(255, 255, 255, 0.2) 48%, transparent 100%);
-  content: "";
-  inset: -140% auto -140% -36%;
-  pointer-events: none;
-  position: absolute;
-  transform: rotate(24deg) translateX(-140%);
-  transition: transform 0.52s ease;
-  width: 34%;
-  z-index: 1;
-}
-
-.btn-glass:hover::after {
-  transform: rotate(24deg) translateX(320%);
-}
-
-.btn-green:focus-visible,
-.btn-success:focus-visible,
-.btn-glass:focus-visible,
-.nav-btn:focus-visible {
-  box-shadow: 0 0 0 2px rgba(134, 239, 172, 0.38);
-  outline: none;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .btn-green,
-  .btn-success,
-  .btn-glass,
-  .nav-btn,
-  .btn-green::after,
-  .btn-success::after,
-  .btn-glass::after,
-  .nav-btn::after {
-    transition: none !important;
-  }
-  .btn-green:hover,
-  .btn-success:hover,
-  .btn-glass:hover,
-  .nav-btn:hover {
-    transform: none;
-  }
 }
 
 .card-form {
@@ -1435,6 +1322,19 @@ code {
   padding: 1rem;
 }
 
+.dashboard-card-click {
+  cursor: pointer;
+}
+
+.dashboard-card-click:hover {
+  border-color: #3f8f62;
+}
+
+.dashboard-card-click:focus-visible {
+  border-color: #6ee7a5;
+  outline: none;
+}
+
 .dashboard-label {
   color: #8fb8a2;
   font-size: 0.76rem;
@@ -1603,6 +1503,10 @@ code {
   border: 1px solid #214a31;
   border-radius: 11px;
   overflow: hidden;
+}
+
+.today-programme-col.dashboard-card-click:hover {
+  border-color: #3f8f62;
 }
 
 .today-programme-head {
@@ -2165,6 +2069,15 @@ code {
   overflow: hidden;
 }
 
+.add-day-column.is-today {
+  border-color: #4ade80;
+  box-shadow: 0 0 0 1px rgba(74, 222, 128, 0.32);
+}
+
+.add-day-column.is-today .add-day-header {
+  background: #123322;
+}
+
 .add-day-header {
   background: #0e1f15;
   border-bottom: 1px solid #214a31;
@@ -2180,6 +2093,20 @@ code {
 .add-day-date {
   color: #93b7a2;
   font-size: 0.75rem;
+}
+
+.add-day-today-badge {
+  background: rgba(74, 222, 128, 0.2);
+  border: 1px solid rgba(74, 222, 128, 0.7);
+  border-radius: 999px;
+  color: #d8ffe9;
+  display: inline-block;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  margin-top: 0.28rem;
+  padding: 0.12rem 0.42rem;
+  text-transform: uppercase;
 }
 
 .add-day-body {

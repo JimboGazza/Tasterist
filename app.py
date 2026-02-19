@@ -7,6 +7,8 @@ import os
 import sys
 import sqlite3
 import calendar
+import csv
+import io
 import re
 import subprocess
 import json
@@ -4924,6 +4926,73 @@ def cloud_backup():
         as_attachment=True,
         download_name=backup_name,
         mimetype="application/octet-stream"
+    )
+
+
+@app.route("/export/tasters/app-added.csv")
+@admin_required
+def export_app_added_tasters_csv():
+    db = get_db()
+    rows = db.execute(
+        """
+        SELECT
+            t.id,
+            t.child,
+            t.programme,
+            t.location,
+            t.class_name,
+            t.session,
+            t.taster_date,
+            t.attended,
+            t.club_fees,
+            t.bg,
+            t.badge,
+            t.notes,
+            a.action AS added_via,
+            a.username AS added_by,
+            a.created_at AS added_at
+        FROM tasters t
+        JOIN audit_logs a
+          ON a.entity_type='taster'
+         AND a.action IN ('add_taster', 'add_taster_manual')
+         AND a.entity_id = CAST(t.id AS TEXT)
+        ORDER BY a.created_at DESC, t.id DESC
+        """
+    ).fetchall()
+
+    fieldnames = [
+        "id",
+        "child",
+        "programme",
+        "location",
+        "class_name",
+        "session",
+        "taster_date",
+        "attended",
+        "club_fees",
+        "bg",
+        "badge",
+        "notes",
+        "added_via",
+        "added_by",
+        "added_at",
+    ]
+
+    out = io.StringIO()
+    writer = csv.DictWriter(out, fieldnames=fieldnames)
+    writer.writeheader()
+    for row in rows:
+        item = dict(row)
+        writer.writerow({k: item.get(k, "") for k in fieldnames})
+    payload = out.getvalue().encode("utf-8")
+    out.close()
+
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return send_file(
+        io.BytesIO(payload),
+        as_attachment=True,
+        download_name=f"tasterist-app-added-tasters-{ts}.csv",
+        mimetype="text/csv; charset=utf-8",
     )
 
 @app.route("/import")

@@ -9,8 +9,13 @@
       <a href="{{ url_for('account_admin') }}" class="btn btn-glass btn-sm">
         <i class="bi bi-shield-lock nav-ico"></i> Admin Console
       </a>
+      {% endif %}
+      {% if is_admin_user %}
       <a href="{{ url_for('import_page') }}" class="btn btn-green btn-sm">
         <i class="bi bi-database-up nav-ico"></i> Import Centre
+      </a>
+      <a href="{{ url_for('cloud_preflight') }}" class="btn btn-glass btn-sm">
+        <i class="bi bi-cloud-check nav-ico"></i> Cloud Preflight
       </a>
       {% endif %}
     </div>
@@ -108,13 +113,18 @@
   <div class="account-grid mb-4">
     <div class="dashboard-card">
       <h5 class="mb-2">Import Management</h5>
-      <p class="dashboard-subtle mb-2">Workbook uploads and full imports are managed in Admin Console.</p>
-      {% if is_owner_user %}
-      <a href="{{ url_for('import_page') }}" class="btn btn-glass btn-sm">
-        <i class="bi bi-database-up nav-ico"></i> Open Import Centre
-      </a>
+      <p class="dashboard-subtle mb-2">Workbook uploads, imports, and app-entry exports are managed in Import Centre.</p>
+      {% if is_admin_user %}
+      <div class="d-flex gap-2 flex-wrap">
+        <a href="{{ url_for('import_page') }}" class="btn btn-glass btn-sm">
+          <i class="bi bi-database-up nav-ico"></i> Open Import Centre
+        </a>
+        <a href="{{ url_for('export_app_added_tasters_csv') }}" class="btn btn-glass btn-sm">
+          <i class="bi bi-download nav-ico"></i> Export App Tasters (CSV)
+        </a>
+      </div>
       {% else %}
-      <p class="dashboard-subtle mb-0">Ask an owner/admin to run imports.</p>
+      <p class="dashboard-subtle mb-0">Ask an admin to run imports/exports.</p>
       {% endif %}
     </div>
   </div>
