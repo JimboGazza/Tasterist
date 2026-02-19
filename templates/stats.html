@@ -10,7 +10,7 @@
   <div class="dashboard-metrics mb-4">
     <section class="dashboard-card">
       <p class="dashboard-label">Latest Month</p>
-      <div class="dashboard-value">{{ totals.latest_month }}</div>
+      <div class="dashboard-value">{{ totals.latest_month|uk_month }}</div>
     </section>
     <section class="dashboard-card">
       <p class="dashboard-label">Total Tasters</p>
@@ -48,7 +48,7 @@
             <tbody>
               {% for r in monthly %}
               <tr class="{% if r.month == current_month %}current-month-row{% endif %}">
-                <td>{{ r.month }}</td>
+                <td>{{ r.month|uk_month }}</td>
                 <td>{{ r.tasters }}</td>
                 <td>{{ r.leavers }}</td>
                 <td>{% if (r.tasters - r.leavers) >= 0 %}+{% endif %}{{ r.tasters - r.leavers }}</td>
@@ -83,7 +83,7 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <script>
 const chartData = {
-  labels: [{% for r in monthly_chart %}"{{ r.month }}",{% endfor %}],
+  labels: [{% for r in monthly_chart %}"{{ r.month|uk_month }}",{% endfor %}],
   datasets: [
     {
       label: "Tasters",

@@ -91,13 +91,13 @@
                 data-bg="{{ 'yes' if t.bg else 'no' }}"
                 data-badge="{{ 'yes' if t.badge else 'no' }}"
                 data-unknown="{{ 'yes' if t.unknown_class else 'no' }}"
-                data-search="{{ (t.child ~ ' ' ~ t.programme ~ ' ' ~ (t.class_name or '') ~ ' ' ~ t.session ~ ' ' ~ t.taster_date ~ ' ' ~ (t.notes or '') ~ ' ' ~ (t.diagnostic_text or '') ~ ' ' ~ (t.location or ''))|lower }}">
+                data-search="{{ (t.child ~ ' ' ~ t.programme ~ ' ' ~ (t.class_name or '') ~ ' ' ~ t.session ~ ' ' ~ t.taster_date ~ ' ' ~ (t.taster_date|uk_date) ~ ' ' ~ (t.notes or '') ~ ' ' ~ (t.diagnostic_text or '') ~ ' ' ~ (t.location or ''))|lower }}">
                 <td><span class="table-flag is-yes">Taster</span></td>
                 <td>{{ t.child }}</td>
                 <td>{{ t.programme|title }}</td>
                 <td>{{ t.class_name or '—' }}</td>
                 <td>{{ t.session }}</td>
-                <td class="tasters-date-col">{{ t.taster_date }}</td>
+                <td class="tasters-date-col">{{ t.taster_date|uk_date }}</td>
                 <td><span class="table-flag {% if t.attended %}is-yes{% else %}is-no{% endif %}">{{ "Yes" if t.attended else "No" }}</span></td>
                 <td><span class="table-flag {% if t.bg %}is-yes{% else %}is-no{% endif %}">{{ "Yes" if t.bg else "No" }}</span></td>
                 <td><span class="table-flag {% if t.badge %}is-yes{% else %}is-no{% endif %}">{{ "Yes" if t.badge else "No" }}</span></td>
@@ -118,13 +118,13 @@
                 data-bg="na"
                 data-badge="na"
                 data-unknown="{{ 'yes' if l.unknown_class else 'no' }}"
-                data-search="{{ (l.child ~ ' ' ~ l.programme ~ ' ' ~ (l.class_name or '') ~ ' ' ~ (l.class_day or '') ~ ' ' ~ (l.session or '') ~ ' ' ~ (l.leave_date or '') ~ ' ' ~ (l.email or '') ~ ' ' ~ (l.source or '') ~ ' ' ~ (l.diagnostic_text or ''))|lower }}">
+                data-search="{{ (l.child ~ ' ' ~ l.programme ~ ' ' ~ (l.class_name or '') ~ ' ' ~ (l.class_day or '') ~ ' ' ~ (l.session or '') ~ ' ' ~ (l.leave_date or l.leave_month or '') ~ ' ' ~ ((l.leave_date or l.leave_month)|uk_date) ~ ' ' ~ (l.email or '') ~ ' ' ~ (l.source or '') ~ ' ' ~ (l.diagnostic_text or ''))|lower }}">
                 <td><span class="table-flag is-no">Leaver</span></td>
                 <td>{{ l.child }}</td>
                 <td>{{ l.programme|title }}</td>
                 <td>{{ l.class_name or "—" }}</td>
                 <td>{{ l.session or "—" }}</td>
-                <td class="tasters-date-col">{{ l.leave_date or l.leave_month }}</td>
+                <td class="tasters-date-col">{{ (l.leave_date or l.leave_month)|uk_date }}</td>
                 <td>—</td>
                 <td>—</td>
                 <td>—</td>

@@ -110,7 +110,7 @@
         <h5 class="mb-2">Last Import</h5>
         <div class="import-meta">
           <span class="import-meta-item">
-            Run at: <strong>{{ last_import.run_at }}</strong>
+            Run at: <strong>{{ last_import.run_at|uk_datetime }}</strong>
           </span>
           {% if last_import.exit_code is not none %}
           <span class="import-meta-item">

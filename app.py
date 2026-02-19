@@ -1041,6 +1041,87 @@ def user_initials(text):
     return (tokens[0][0] + tokens[1][0]).upper()
 
 
+def _coerce_temporal_value(value):
+    if value is None:
+        return ("empty", None)
+    if isinstance(value, datetime):
+        return ("datetime", value)
+    if isinstance(value, date):
+        return ("date", value)
+
+    text = str(value).strip()
+    if not text:
+        return ("empty", None)
+
+    month_match = re.fullmatch(r"(\d{4})-(\d{2})", text)
+    if month_match:
+        year = int(month_match.group(1))
+        month = int(month_match.group(2))
+        if 1 <= month <= 12:
+            return ("month", (year, month))
+
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        try:
+            return ("date", date.fromisoformat(text))
+        except ValueError:
+            return ("text", text)
+
+    normalized = text
+    if normalized.endswith("Z"):
+        normalized = normalized[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(normalized)
+        has_clock = bool(re.search(r"[ T]\d{2}:\d{2}", text))
+        return ("datetime", parsed) if has_clock else ("date", parsed.date())
+    except ValueError:
+        return ("text", text)
+
+
+@app.template_filter("uk_date")
+def format_uk_date(value):
+    kind, parsed = _coerce_temporal_value(value)
+    if kind == "date":
+        return parsed.strftime("%d/%m/%Y")
+    if kind == "datetime":
+        return parsed.strftime("%d/%m/%Y")
+    if kind == "month":
+        year, month = parsed
+        return date(year, month, 1).strftime("%B %Y")
+    if kind == "empty":
+        return ""
+    return str(parsed)
+
+
+@app.template_filter("uk_datetime")
+def format_uk_datetime(value):
+    kind, parsed = _coerce_temporal_value(value)
+    if kind == "datetime":
+        return parsed.strftime("%d/%m/%Y %H:%M")
+    if kind == "date":
+        return parsed.strftime("%d/%m/%Y")
+    if kind == "month":
+        year, month = parsed
+        return date(year, month, 1).strftime("%B %Y")
+    if kind == "empty":
+        return ""
+    return str(parsed)
+
+
+@app.template_filter("uk_month")
+def format_uk_month(value):
+    kind, parsed = _coerce_temporal_value(value)
+    if kind == "datetime":
+        return parsed.strftime("%B %Y")
+    if kind == "date":
+        return parsed.strftime("%B %Y")
+    if kind == "month":
+        year, month = parsed
+        return date(year, month, 1).strftime("%B %Y")
+    if kind == "empty":
+        return ""
+    return str(parsed)
+
+
 def normalise_child_name(value):
     text = re.sub(r"\s+", " ", str(value or "").strip())
     if not text:

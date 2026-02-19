@@ -1,6 +1,8 @@
 {% extends "base.html" %}
 {% block content %}
 
+<div class="day-detail-page">
+
 <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
   <a class="btn btn-glass btn-sm"
       href="{{ url_for('month',
@@ -46,6 +48,7 @@
   </div>
 {% else %}
 
+  <div class="day-records">
   {% for session, rows in data.groupby('session') %}
   <div class="day-session mb-4">
 
@@ -106,8 +109,9 @@
     </div>
   </div>
   {% endfor %}
+  </div>
 
-  <div class="day-bottom-grid mt-4">
+  <div class="day-bottom-grid day-bottom-docked mt-4">
     <section class="dashboard-card day-summary-card">
       <h5 class="mb-3">Day Snapshot</h5>
       <div class="day-kpi-grid">
@@ -157,5 +161,7 @@
   </div>
 
 {% endif %}
+
+</div>
 
 {% endblock %}

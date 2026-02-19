@@ -132,7 +132,7 @@
           </div>
         </div>
         <div class="dashboard-pills">
-          <span class="dashboard-pill">Last Import: {{ monitor.run_at }}</span>
+          <span class="dashboard-pill">Last Import: {{ monitor.run_at|uk_datetime }}</span>
           <span class="dashboard-pill">Warnings: {{ monitor.warnings }}</span>
           <span class="dashboard-pill">Import Tasters: {{ monitor.import_total_tasters if monitor.import_total_tasters is not none else "—" }}</span>
           <span class="dashboard-pill">DB Tasters: {{ monitor.db_total_tasters }}</span>
