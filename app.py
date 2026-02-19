@@ -109,6 +109,27 @@ def is_env_true(name, default="0"):
     return os.environ.get(name, default).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def enforce_password_policy():
+    # Default off per operator request; can be re-enabled explicitly.
+    return is_env_true("TASTERIST_ENFORCE_PASSWORD_POLICY", "0")
+
+
+def legacy_account_cleanup_enabled():
+    # Legacy hardening can remove users; keep disabled unless explicitly requested.
+    return is_env_true("TASTERIST_LEGACY_ACCOUNT_CLEANUP", "0")
+
+
+def should_force_password_change(role, must_change_flag=False, raw_password=None):
+    role_name = (role or "").strip().lower()
+    if role_name in {"admin", "owner"}:
+        return False
+    if bool(must_change_flag):
+        return True
+    if raw_password is not None and enforce_password_policy():
+        return bool(password_strength_errors(raw_password))
+    return False
+
+
 def email_owner_only_mode():
     # Hard-safety default: weekly emails only go to owner address.
     return is_env_true("TASTERIST_EMAIL_OWNER_ONLY", "1")
@@ -771,7 +792,7 @@ def _init_db_once():
             owner_bootstrap_password = secrets.token_urlsafe(16)
             print("⚠️ No users found: created owner with generated bootstrap password.")
             print("⚠️ Set TASTERIST_OWNER_BOOTSTRAP_PASSWORD for predictable first boot credentials.")
-        owner_must_change = 1 if (password_strength_errors(owner_bootstrap_password) or is_password_weak_literal(owner_bootstrap_password)) else 0
+        owner_must_change = 0
         cur.execute("""
             INSERT INTO users (username, password_hash, full_name, role, password_must_change, email_weekly_reports)
             VALUES (?, ?, ?, 'owner', ?, 1)
@@ -795,7 +816,7 @@ def _init_db_once():
         if not owner_bootstrap_password:
             owner_bootstrap_password = secrets.token_urlsafe(16)
             print("⚠️ Owner account missing: created owner with generated bootstrap password.")
-        owner_must_change = 1 if (password_strength_errors(owner_bootstrap_password) or is_password_weak_literal(owner_bootstrap_password)) else 0
+        owner_must_change = 0
         cur.execute("""
             INSERT INTO users (username, password_hash, full_name, role, password_must_change, email_weekly_reports)
             VALUES (?, ?, ?, 'owner', ?, 1)
@@ -804,39 +825,53 @@ def _init_db_once():
     # Break-glass owner reset for cloud recovery.
     # If TASTERIST_OWNER_RESET_PASSWORD is set, owner password is rotated at startup.
     if OWNER_RESET_PASSWORD:
-        reset_must_change = 1
-        cur.execute("""
-            UPDATE users
-            SET password_hash=?,
-                password_must_change=?,
-                role='owner'
-            WHERE lower(username)=?
-        """, (generate_password_hash(OWNER_RESET_PASSWORD), reset_must_change, OWNER_EMAIL))
-        print("⚠️ Owner password reset applied from TASTERIST_OWNER_RESET_PASSWORD.")
+        already_applied = int(cur.execute(
+            "SELECT COUNT(*) FROM audit_logs WHERE action='owner_reset_password_env_applied'"
+        ).fetchone()[0] or 0) > 0
+        if not already_applied or is_env_true("TASTERIST_OWNER_RESET_ALWAYS", "0"):
+            cur.execute("""
+                UPDATE users
+                SET password_hash=?,
+                    password_must_change=0,
+                    role='owner'
+                WHERE lower(username)=?
+            """, (generate_password_hash(OWNER_RESET_PASSWORD), OWNER_EMAIL))
+            cur.execute(
+                """
+                INSERT INTO audit_logs (created_at, username, action, entity_type, entity_id, status, details)
+                VALUES (?, 'system', 'owner_reset_password_env_applied', 'user', ?, 'ok', ?)
+                """,
+                (
+                    datetime.now().isoformat(timespec="seconds"),
+                    OWNER_EMAIL,
+                    "Owner password reset applied from TASTERIST_OWNER_RESET_PASSWORD",
+                ),
+            )
+            print("⚠️ Owner password reset applied from TASTERIST_OWNER_RESET_PASSWORD.")
 
-    # Remove insecure historical default admin bootstrap accounts.
-    insecure_usernames = {
-        "admin",
-        os.environ.get("TASTERIST_ADMIN_USER", "admin").strip().lower(),
-    }
-    for username in insecure_usernames:
-        if not username or username == OWNER_EMAIL:
-            continue
-        cur.execute("DELETE FROM user_admin_days WHERE user_id IN (SELECT id FROM users WHERE lower(username)=?)", (username,))
-        cur.execute("DELETE FROM users WHERE lower(username)=?", (username,))
-
-    # Remove non-owner users still using known weak/default passwords.
-    user_rows = cur.execute("SELECT id, username, password_hash FROM users").fetchall()
-    for row in user_rows:
-        row_id = row["id"] if isinstance(row, sqlite3.Row) else row[0]
-        row_username = (row["username"] if isinstance(row, sqlite3.Row) else row[1]).strip().lower()
-        row_hash = row["password_hash"] if isinstance(row, sqlite3.Row) else row[2]
-        if any(check_password_hash(row_hash, weak) for weak in WEAK_PASSWORDS):
-            if row_username == OWNER_EMAIL:
-                cur.execute("UPDATE users SET password_must_change=1 WHERE id=?", (row_id,))
+    if legacy_account_cleanup_enabled():
+        # Remove insecure historical default admin bootstrap accounts.
+        insecure_usernames = {
+            "admin",
+            os.environ.get("TASTERIST_ADMIN_USER", "admin").strip().lower(),
+        }
+        for username in insecure_usernames:
+            if not username or username == OWNER_EMAIL:
                 continue
-            cur.execute("DELETE FROM user_admin_days WHERE user_id=?", (row_id,))
-            cur.execute("DELETE FROM users WHERE id=?", (row_id,))
+            cur.execute("DELETE FROM user_admin_days WHERE user_id IN (SELECT id FROM users WHERE lower(username)=?)", (username,))
+            cur.execute("DELETE FROM users WHERE lower(username)=?", (username,))
+
+        # Remove non-owner users still using known weak/default passwords.
+        user_rows = cur.execute("SELECT id, username, password_hash FROM users").fetchall()
+        for row in user_rows:
+            row_id = row["id"] if isinstance(row, sqlite3.Row) else row[0]
+            row_username = (row["username"] if isinstance(row, sqlite3.Row) else row[1]).strip().lower()
+            row_hash = row["password_hash"] if isinstance(row, sqlite3.Row) else row[2]
+            if any(check_password_hash(row_hash, weak) for weak in WEAK_PASSWORDS):
+                if row_username == OWNER_EMAIL:
+                    continue
+                cur.execute("DELETE FROM user_admin_days WHERE user_id=?", (row_id,))
+                cur.execute("DELETE FROM users WHERE id=?", (row_id,))
 
     normalise_existing_child_names(db)
     db.commit()
@@ -1302,7 +1337,10 @@ def require_login():
     user = current_user()
     if user is None:
         return redirect(url_for("login", next=request.path))
-    must_change = bool(session.get("must_change_password")) or bool(user.get("password_must_change"))
+    must_change = should_force_password_change(
+        user.get("role"),
+        must_change_flag=(bool(session.get("must_change_password")) or bool(user.get("password_must_change"))),
+    )
     if must_change and request.endpoint not in {
         "account_settings", "logout", "static", "health"
     }:
@@ -1331,8 +1369,8 @@ def login():
             return render_template("login.html"), 400
 
         user_rows = query(
-            "SELECT id, username, password_hash, password_must_change FROM users WHERE username=?",
-            (username,)
+            "SELECT id, username, role, password_hash, password_must_change FROM users WHERE username=?",
+            (username,),
         )
         if not user_rows or not check_password_hash(user_rows[0]["password_hash"], password):
             record_failed_login(ip_key)
@@ -1342,9 +1380,10 @@ def login():
         clear_login_failures(ip_key)
         session["user_id"] = user_rows[0]["id"]
         session.permanent = True
-        session["must_change_password"] = bool(
-            user_rows[0]["password_must_change"]
-            or password_strength_errors(password)
+        session["must_change_password"] = should_force_password_change(
+            user_rows[0]["role"],
+            must_change_flag=user_rows[0]["password_must_change"],
+            raw_password=password,
         )
         log_audit("login", entity_type="user", entity_id=user_rows[0]["id"], details="Successful login")
         flash("Signed in.", "success")
@@ -1370,6 +1409,7 @@ def logout():
     if user:
         log_audit("logout", entity_type="user", entity_id=user["id"], details="Signed out")
     session.pop("user_id", None)
+    session.pop("must_change_password", None)
     flash("Signed out.", "success")
     return redirect(url_for("login"))
 
@@ -3889,13 +3929,15 @@ def account_settings():
                 "SELECT password_hash FROM users WHERE id=?",
                 (user["id"],)
             ).fetchone()
-            if not row or not check_password_hash(row["password_hash"], current_password):
+            require_current_password = not is_admin_user(user)
+            if require_current_password and (not row or not check_password_hash(row["password_hash"], current_password)):
                 flash("Current password is incorrect.", "danger")
                 return redirect(url_for("account_settings"))
-            password_errors = password_strength_errors(new_password)
-            if password_errors:
-                flash("New password " + "; ".join(password_errors) + ".", "warning")
-                return redirect(url_for("account_settings"))
+            if enforce_password_policy() and not is_admin_user(user):
+                password_errors = password_strength_errors(new_password)
+                if password_errors:
+                    flash("New password " + "; ".join(password_errors) + ".", "warning")
+                    return redirect(url_for("account_settings"))
             if new_password != confirm_password:
                 flash("New password and confirmation do not match.", "warning")
                 return redirect(url_for("account_settings"))
@@ -4001,10 +4043,11 @@ def account_admin():
                 flash("That email is already used by another account.", "warning")
                 return redirect(url_for("account_admin"))
 
-            temporary_password = secrets.token_urlsafe(10)
+            default_password = os.environ.get("TASTERIST_DEFAULT_USER_PASSWORD", "JamesRocks1946!").strip()
+            temporary_password = default_password or secrets.token_urlsafe(10)
             db.execute("""
                 INSERT INTO users (username, password_hash, full_name, role, password_must_change)
-                VALUES (?, ?, ?, ?, 1)
+                VALUES (?, ?, ?, ?, 0)
             """, (username, generate_password_hash(temporary_password), full_name, role))
             target_user_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
 
@@ -4021,7 +4064,7 @@ def account_admin():
                 details=f"Created account {username} role={role} admin_days={len(selected_values)}",
             )
             flash(
-                f"Created account: {username}. Temporary password is {temporary_password}",
+                f"Created account: {username}. Password is {temporary_password}",
                 "success",
             )
             return redirect(url_for("account_admin"))
@@ -4112,10 +4155,11 @@ def account_admin():
                     return redirect(url_for("account_admin"))
 
             if new_password:
-                password_errors = password_strength_errors(new_password)
-                if password_errors:
-                    flash("New password " + "; ".join(password_errors) + ".", "warning")
-                    return redirect(url_for("account_admin"))
+                if enforce_password_policy() and role == "staff":
+                    password_errors = password_strength_errors(new_password)
+                    if password_errors:
+                        flash("New password " + "; ".join(password_errors) + ".", "warning")
+                        return redirect(url_for("account_admin"))
 
             db.execute(
                 "UPDATE users SET full_name=?, username=?, role=? WHERE id=?",
@@ -4123,7 +4167,7 @@ def account_admin():
             )
             if new_password:
                 db.execute(
-                    "UPDATE users SET password_hash=?, password_must_change=1 WHERE id=?",
+                    "UPDATE users SET password_hash=?, password_must_change=0 WHERE id=?",
                     (generate_password_hash(new_password), target_user_id)
                 )
 

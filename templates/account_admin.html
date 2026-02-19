@@ -48,7 +48,7 @@
           </div>
         </div>
         <p class="dashboard-subtle mb-2">
-          New accounts get a unique temporary password and must change it at first sign-in.
+          New accounts use your configured default password (or generated fallback) and can sign in immediately.
         </p>
 
         <div class="dashboard-label mt-2 mb-2">Admin Day Ownership (Optional)</div>
@@ -87,7 +87,7 @@
           </div>
           <div class="d-flex align-items-center gap-2">
             <span class="account-admin-pass {% if u.password_must_change %}is-temp{% else %}is-changed{% endif %}">
-              {% if u.password_must_change %}Temporary Password Active{% else %}Password Updated{% endif %}
+              {% if u.password_must_change %}Password Reset Required{% else %}Password Set{% endif %}
             </span>
             <span class="account-admin-role {% if u.role == 'owner' %}is-owner{% elif u.role == 'admin' %}is-admin{% else %}is-staff{% endif %}">
               {{ u.role|title }}
