@@ -1935,6 +1935,19 @@ def shift_time_value_to_pm(value):
     return f"{pm_hour:02d}:{minute:02d}:{second:02d}"
 
 
+def shift_time_value_late_evening_to_day(value):
+    parsed = parse_hhmm_like(value)
+    if not parsed:
+        return None
+    hour, minute, second = parsed
+    if hour < 20:
+        return None
+    day_hour = hour - 12
+    if second is None:
+        return f"{day_hour:02d}:{minute:02d}"
+    return f"{day_hour:02d}:{minute:02d}:{second:02d}"
+
+
 def run_pm_time_fix(force=False, include_preschool=False):
     conn = open_db_connection()
     cur = conn.cursor()
@@ -2081,6 +2094,126 @@ def run_pm_time_fix(force=False, include_preschool=False):
     }
 
 
+def run_late_night_time_fix(force=False):
+    conn = open_db_connection()
+    cur = conn.cursor()
+
+    if not force:
+        existing = cur.execute(
+            "SELECT COUNT(*) FROM audit_logs WHERE action='auto_fix_late_night_times'"
+        ).fetchone()[0]
+        if int(existing or 0) > 0:
+            conn.close()
+            return {
+                "applied": False,
+                "reason": "already_ran",
+                "suspicious_count": 0,
+                "tasters_updated": 0,
+                "leavers_updated": 0,
+                "class_start_updated": 0,
+                "class_end_updated": 0,
+            }
+
+    suspicious_count = int(cur.execute("""
+        SELECT COUNT(*)
+        FROM tasters
+        WHERE lower(trim(programme)) IN ('lockwood', 'honley')
+          AND trim(COALESCE(session, '')) <> ''
+          AND CAST(substr(session, 1, 2) AS INTEGER) >= 20
+    """).fetchone()[0] or 0)
+    if not force and suspicious_count < 20:
+        conn.close()
+        return {
+            "applied": False,
+            "reason": "not_suspicious",
+            "suspicious_count": suspicious_count,
+            "tasters_updated": 0,
+            "leavers_updated": 0,
+            "class_start_updated": 0,
+            "class_end_updated": 0,
+        }
+
+    tasters_updated = 0
+    leavers_updated = 0
+    class_start_updated = 0
+    class_end_updated = 0
+
+    taster_rows = cur.execute("""
+        SELECT id, session
+        FROM tasters
+        WHERE lower(trim(programme)) IN ('lockwood', 'honley')
+    """).fetchall()
+    for row in taster_rows:
+        shifted = shift_time_value_late_evening_to_day(row["session"])
+        if shifted and shifted != (row["session"] or ""):
+            cur.execute("UPDATE tasters SET session=? WHERE id=?", (shifted, row["id"]))
+            tasters_updated += 1
+
+    leaver_rows = cur.execute("""
+        SELECT id, session
+        FROM leavers
+        WHERE lower(trim(programme)) IN ('lockwood', 'honley')
+    """).fetchall()
+    for row in leaver_rows:
+        shifted = shift_time_value_late_evening_to_day(row["session"])
+        if shifted and shifted != (row["session"] or ""):
+            cur.execute("UPDATE leavers SET session=? WHERE id=?", (shifted, row["id"]))
+            leavers_updated += 1
+
+    class_rows = cur.execute("""
+        SELECT id, start_time, end_time
+        FROM class_sessions
+        WHERE lower(trim(programme)) IN ('lockwood', 'honley')
+          AND day='Saturday'
+    """).fetchall()
+    for row in class_rows:
+        shifted_start = shift_time_value_late_evening_to_day(row["start_time"])
+        shifted_end = shift_time_value_late_evening_to_day(row["end_time"])
+        update_start = shifted_start and shifted_start != (row["start_time"] or "")
+        update_end = shifted_end and shifted_end != (row["end_time"] or "")
+        if not update_start and not update_end:
+            continue
+        cur.execute(
+            "UPDATE class_sessions SET start_time=?, end_time=? WHERE id=?",
+            (
+                shifted_start if update_start else row["start_time"],
+                shifted_end if update_end else row["end_time"],
+                row["id"],
+            ),
+        )
+        if update_start:
+            class_start_updated += 1
+        if update_end:
+            class_end_updated += 1
+
+    total_updates = tasters_updated + leavers_updated + class_start_updated + class_end_updated
+    if total_updates > 0:
+        action = "manual_fix_late_night_times" if force else "auto_fix_late_night_times"
+        details = (
+            f"suspicious_count={suspicious_count} | "
+            f"tasters={tasters_updated} | leavers={leavers_updated} | "
+            f"class_start={class_start_updated} | class_end={class_end_updated}"
+        )
+        cur.execute(
+            """
+            INSERT INTO audit_logs (created_at, username, action, entity_type, entity_id, status, details)
+            VALUES (?, 'system', ?, 'system', 'time-fix', 'ok', ?)
+            """,
+            (datetime.now().isoformat(timespec="seconds"), action, details),
+        )
+    conn.commit()
+    conn.close()
+    return {
+        "applied": total_updates > 0,
+        "reason": "updated" if total_updates > 0 else "nothing_to_update",
+        "suspicious_count": suspicious_count,
+        "tasters_updated": tasters_updated,
+        "leavers_updated": leavers_updated,
+        "class_start_updated": class_start_updated,
+        "class_end_updated": class_end_updated,
+    }
+
+
 def maybe_auto_fix_pm_times():
     if not is_env_true("TASTERIST_AUTO_FIX_PM_TIMES", "1"):
         return
@@ -2094,6 +2227,21 @@ def maybe_auto_fix_pm_times():
             )
     except Exception as exc:
         print(f"⚠️ Auto PM-time fix failed: {exc}")
+
+
+def maybe_auto_fix_late_night_times():
+    if not is_env_true("TASTERIST_AUTO_FIX_LATE_NIGHT_TIMES", "1"):
+        return
+    try:
+        result = run_late_night_time_fix(force=False)
+        if result.get("applied"):
+            print(
+                "🌙 Auto late-night time fix applied: "
+                f"tasters={result['tasters_updated']}, leavers={result['leavers_updated']}, "
+                f"class_start={result['class_start_updated']}, class_end={result['class_end_updated']}"
+            )
+    except Exception as exc:
+        print(f"⚠️ Auto late-night time fix failed: {exc}")
 
 
 def _hhmm_to_minutes(value):
@@ -2696,6 +2844,10 @@ def build_week_schedule(programme, week_start):
     today = date.today()
     window_start = today.isoformat()
     window_end = (today + timedelta(days=30)).isoformat()
+    programme_has_templates = int(db.execute(
+        "SELECT COUNT(*) AS c FROM class_sessions WHERE programme=?",
+        (programme,),
+    ).fetchone()["c"] or 0) > 0
 
     for offset in range(7):
         day_date = week_start + timedelta(days=offset)
@@ -2719,9 +2871,9 @@ def build_week_schedule(programme, week_start):
             """, (programme, day_name)).fetchall()
             source_mode = "weekly"
 
-        # Cloud-safe fallback: if class_sessions are empty, derive a usable weekly
-        # schedule from recent taster data so Add/Leaver screens are never blank.
-        if not rows:
+        # Only derive from taster history when a programme has no timetable templates
+        # at all. This avoids one-off records showing as fake weekly classes.
+        if not rows and not programme_has_templates:
             weekday_sql = day_date.strftime("%w")
             recent_cutoff = (today - timedelta(days=210)).isoformat()
             derived_rows = db.execute("""
@@ -4734,6 +4886,7 @@ def dev_panel():
 init_db()
 maybe_restore_sqlite_from_postgres()
 maybe_auto_fix_pm_times()
+maybe_auto_fix_late_night_times()
 
 try:
     _boot_db = open_db_connection()
