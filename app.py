@@ -2412,6 +2412,42 @@ def extract_day_name(value):
     return ""
 
 
+def _parse_iso_date(value):
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text).date()
+    except ValueError:
+        return None
+
+
+def _programme_has_session_templates_for_day(db, programme, target_date):
+    if not target_date:
+        return False
+    day_name = target_date.strftime("%A")
+    day_iso = target_date.isoformat()
+    row = db.execute(
+        """
+        SELECT COUNT(*) AS c
+        FROM class_sessions
+        WHERE programme=?
+          AND (session_date=? OR day=?)
+        """,
+        (programme, day_iso, day_name),
+    ).fetchone()
+    return int(row["c"] or 0) > 0
+
+
+def _validate_programme_date_guardrails(db, programme, target_date):
+    # Keep this dynamic: only block when there are no matching timetable templates.
+    # If Saturday preschool classes are added later, entries will be accepted.
+    if programme == "preschool" and target_date.strftime("%A") == "Saturday":
+        if not _programme_has_session_templates_for_day(db, programme, target_date):
+            return False, "No preschool sessions are configured for Saturdays."
+    return True, ""
+
+
 def _programme_tokens(programme):
     p = (programme or "").lower()
     if p == "preschool":
@@ -3179,6 +3215,7 @@ def toggle_flag(taster_id, column):
 # ==========================================================
 
 @app.route("/")
+@app.route("/dashboard")
 def dashboard():
     db = get_db()
     today = date.today()
@@ -4526,6 +4563,15 @@ def add():
             flash("Please choose a session", "danger")
             return redirect(request.url)
 
+        taster_dt = _parse_iso_date(taster_date)
+        if not taster_dt:
+            flash("Invalid taster date.", "danger")
+            return redirect(request.url)
+        allowed, reason = _validate_programme_date_guardrails(db, programme, taster_dt)
+        if not allowed:
+            flash(reason, "warning")
+            return redirect(request.url)
+
         db.execute("""
             INSERT INTO tasters
             (child, programme, location, session, class_name, taster_date, notes)
@@ -4603,6 +4649,15 @@ def add_manual_taster():
 
         if not child or not taster_date or not session_label:
             flash("Name, date, and session label are required.", "danger")
+            return redirect(request.url)
+
+        taster_dt = _parse_iso_date(taster_date)
+        if not taster_dt:
+            flash("Invalid taster date.", "danger")
+            return redirect(request.url)
+        allowed, reason = _validate_programme_date_guardrails(db, programme, taster_dt)
+        if not allowed:
+            flash(reason, "warning")
             return redirect(request.url)
 
         db.execute("""
