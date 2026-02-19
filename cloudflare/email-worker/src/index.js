@@ -30,6 +30,9 @@ function mimePart(contentType, data) {
 
 function buildMime({ fromHeader, to, subject, text, html }) {
   const boundary = `b-${crypto.randomUUID()}`;
+  const messageIdDomain = extractEmail(fromHeader).split("@")[1] || "tasterist.com";
+  const messageId = `<${crypto.randomUUID()}@${messageIdDomain}>`;
+  const nowRfc2822 = new Date().toUTCString();
   const safeSubject = String(subject || "").replace(/\r|\n/g, " ").trim();
   const plainText = String(text || "").trim();
   const htmlBody = String(html || "").trim() || `<pre>${escHtml(plainText)}</pre>`;
@@ -38,6 +41,8 @@ function buildMime({ fromHeader, to, subject, text, html }) {
     `From: ${fromHeader}`,
     `To: ${to}`,
     `Subject: ${safeSubject}`,
+    `Date: ${nowRfc2822}`,
+    `Message-ID: ${messageId}`,
     "MIME-Version: 1.0",
     `Content-Type: multipart/alternative; boundary="${boundary}"`,
     "",
