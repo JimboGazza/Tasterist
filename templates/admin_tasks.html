@@ -100,7 +100,7 @@
             <div class="task-row-name">{{ t.child }}</div>
             <div class="dashboard-subtle">
               {{ t.taster_date|uk_date }} • {{ t.day_name }} • {{ t.programme|title }}
-              {% if t.class_name %} • {{ t.class_name }}{% endif %}
+              {% if t.class_name %} • {{ t.class_name|replace('Pennine Gymnastics ', '')|replace('Pennine Gymnastics', '') }}{% endif %}
               {% if t.session %} • {{ t.session }}{% endif %}
             </div>
           </div>
