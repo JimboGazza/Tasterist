@@ -285,6 +285,22 @@ def _translate_sql_for_postgres(sql):
     if text.strip().lower() == "select last_insert_rowid()":
         return "SELECT pg_catalog.lastval()"
 
+    # SQLite compatibility: tolerate legacy INSERT OR IGNORE statements.
+    # PostgreSQL equivalent is INSERT ... ON CONFLICT DO NOTHING.
+    if re.search(r"^\s*INSERT\s+OR\s+IGNORE\s+INTO\s", text, flags=re.IGNORECASE):
+        text = re.sub(
+            r"^\s*INSERT\s+OR\s+IGNORE\s+INTO\s",
+            "INSERT INTO ",
+            text,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+        if not re.search(r"\bON\s+CONFLICT\b", text, flags=re.IGNORECASE):
+            stripped = text.rstrip()
+            suffix = ";" if stripped.endswith(";") else ""
+            core = stripped[:-1] if suffix else stripped
+            text = f"{core} ON CONFLICT DO NOTHING{suffix}"
+
     text = re.sub(
         r"CAST\s*\(\s*strftime\('%Y'\s*,\s*([^)]+)\)\s+AS\s+INTEGER\s*\)",
         r"CAST(to_char((\1)::date, 'YYYY') AS INTEGER)",
@@ -3654,6 +3670,9 @@ def add_leaver():
         if not session_label:
             flash("Please choose a class/session.", "warning")
             return redirect(request.url)
+        if removed_la == 0 and removed_bg == 0 and added_to_board == 0 and not reason:
+            flash("Please complete at least one leaver checklist item or add a reason.", "warning")
+            return redirect(request.url)
 
         try:
             leave_dt = datetime.fromisoformat(leave_date).date()
@@ -3757,6 +3776,9 @@ def add_manual_leaver():
 
         if not child or not leave_date or not session_label:
             flash("Name, leave date, and session label are required.", "danger")
+            return redirect(request.url)
+        if removed_la == 0 and removed_bg == 0 and added_to_board == 0 and not reason:
+            flash("Please complete at least one leaver checklist item or add a reason.", "warning")
             return redirect(request.url)
 
         try:

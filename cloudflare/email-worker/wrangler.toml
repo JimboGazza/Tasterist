@@ -1,0 +1,16 @@
+name = "tasterist-email-webhook"
+main = "src/index.js"
+compatibility_date = "2026-02-19"
+workers_dev = true
+
+[triggers]
+crons = ["0 8 * * 1"]
+
+[vars]
+OWNER_EMAIL = "james@penninegymnastics.com"
+DEFAULT_FROM = "Tasterist <noreply@tasterist.com>"
+RENDER_CRON_URL = "https://tasterist.com/cron/weekly-admin-report"
+
+[[send_email]]
+name = "TASTERIST_SEND"
+destination_address = "james@penninegymnastics.com"

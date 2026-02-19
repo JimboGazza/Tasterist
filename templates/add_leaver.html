@@ -65,9 +65,14 @@
     </div>
   </div>
 
-  <a href="{{ url_for('add_manual_leaver', programme=programme, week_start=week_start.isoformat()) }}" class="btn btn-glass mb-3">
-    Add Manual Session (Separate Screen)
-  </a>
+  <div class="d-flex gap-2 flex-wrap mb-3">
+    <a href="{{ url_for('add_manual_leaver', programme=programme, week_start=week_start.isoformat()) }}" class="btn btn-glass">
+      Add Manual Session (Separate Screen)
+    </a>
+    <a href="{{ url_for('dashboard') }}" class="btn btn-glass">
+      Back to Overall View
+    </a>
+  </div>
 
   <div id="addLeaverPanel" class="card-form add-taster-panel d-none">
     <div class="selected-session-box mb-3">
@@ -75,7 +80,12 @@
       <div id="selectedSessionMeta" class="selected-session-meta">No class selected yet</div>
     </div>
 
-    <form method="post">
+    <div class="d-flex gap-2 flex-wrap mb-3">
+      <button type="button" id="backToWeekBtn" class="btn btn-glass">Back to Week Overview</button>
+      <a href="{{ url_for('dashboard') }}" class="btn btn-glass">Back to Overall View</a>
+    </div>
+
+    <form id="addLeaverForm" method="post">
       {{ csrf_field() }}
       <input type="hidden" name="programme" value="{{ programme }}">
       <input type="hidden" name="session" id="sessionValueInput">
@@ -133,10 +143,21 @@ const classNameInput = document.getElementById("classNameInput");
 const leaveDateInput = document.getElementById("leaveDateInput");
 const selectedTitle = document.getElementById("selectedSessionTitle");
 const selectedMeta = document.getElementById("selectedSessionMeta");
+const backToWeekBtn = document.getElementById("backToWeekBtn");
+const leaverForm = document.getElementById("addLeaverForm");
+const reasonInput = leaverForm.querySelector("input[name='reason']");
+const checklistInputs = Array.from(
+  leaverForm.querySelectorAll("input[name='removed_la'], input[name='removed_bg'], input[name='added_to_board']")
+);
 const defaultDate = "{{ today_str }}";
 
 function showPanel() {
   panel.classList.remove("d-none");
+}
+
+function showWeekPicker() {
+  panel.classList.add("d-none");
+  weekPickerWrap.classList.remove("d-none");
 }
 
 function selectClass(tile) {
@@ -162,6 +183,24 @@ function selectClass(tile) {
 
 tiles.forEach((tile) => {
   tile.addEventListener("click", () => selectClass(tile));
+});
+
+backToWeekBtn.addEventListener("click", () => {
+  showWeekPicker();
+});
+
+leaverForm.addEventListener("submit", (event) => {
+  if (!sessionValueInput.value.trim()) {
+    event.preventDefault();
+    alert("Please choose a class/session.");
+    return;
+  }
+  const hasChecklist = checklistInputs.some((input) => input.checked);
+  const hasReason = (reasonInput.value || "").trim().length > 0;
+  if (!hasChecklist && !hasReason) {
+    event.preventDefault();
+    alert("Please complete at least one leaver checklist item or add a reason.");
+  }
 });
 </script>
 
