@@ -17,6 +17,7 @@ import time
 import shutil
 import urllib.error
 import urllib.request
+from collections.abc import Mapping
 from functools import wraps
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -95,6 +96,13 @@ ADMIN_DAY_HIDDEN_CELLS = {
     ("Saturday", "preschool"),
 }
 EMAIL_FROM_DEFAULT = os.environ.get("TASTERIST_EMAIL_FROM", "Tasterist <noreply@tasterist.com>").strip()
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+DB_BACKEND = os.environ.get("TASTERIST_DB_BACKEND", "").strip().lower()
+if DB_BACKEND not in {"sqlite", "postgres"}:
+    DB_BACKEND = "postgres" if DATABASE_URL else "sqlite"
+if DB_BACKEND == "postgres" and not DATABASE_URL:
+    DB_BACKEND = "sqlite"
+USING_POSTGRES = DB_BACKEND == "postgres"
 
 
 def is_env_true(name, default="0"):
@@ -121,6 +129,27 @@ def safe_internal_target(raw_target):
     if not target.startswith("/") or target.startswith("//"):
         return None
     return target
+
+
+def redact_database_url(raw_url):
+    url = (raw_url or "").strip()
+    if not url:
+        return ""
+    parsed = urlsplit(url)
+    if not parsed.scheme:
+        return url
+    netloc = parsed.netloc
+    if "@" in netloc:
+        userinfo, hostinfo = netloc.rsplit("@", 1)
+        if ":" in userinfo:
+            user = userinfo.split(":", 1)[0]
+            safe_userinfo = f"{user}:***"
+        else:
+            safe_userinfo = userinfo
+        safe_netloc = f"{safe_userinfo}@{hostinfo}"
+    else:
+        safe_netloc = netloc
+    return f"{parsed.scheme}://{safe_netloc}{parsed.path or ''}"
 
 
 def destructive_imports_enabled():
@@ -168,6 +197,8 @@ def get_import_source_folder():
 
     render_default = "/var/data/taster-sheets"
     if _running_in_prod():
+        if USING_POSTGRES and not os.path.isdir("/var/data"):
+            return os.path.join("/tmp", "taster-sheets")
         return render_default
 
     onedrive_default = (
@@ -183,16 +214,184 @@ def get_import_source_folder():
 
     return LOCAL_SHEETS_FALLBACK
 
+
+class RowCompat(Mapping):
+    def __init__(self, columns, values):
+        self._columns = tuple(columns)
+        self._values = tuple(values)
+        self._data = {k: v for k, v in zip(self._columns, self._values)}
+
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return self._values[key]
+        return self._data[key]
+
+    def __iter__(self):
+        return iter(self._data)
+
+    def __len__(self):
+        return len(self._data)
+
+    def get(self, key, default=None):
+        return self._data.get(key, default)
+
+
+def _replace_qmarks_with_percent_s(sql):
+    out = []
+    in_single_quote = False
+    i = 0
+    while i < len(sql):
+        ch = sql[i]
+        if ch == "'":
+            out.append(ch)
+            if in_single_quote and i + 1 < len(sql) and sql[i + 1] == "'":
+                out.append(sql[i + 1])
+                i += 1
+            else:
+                in_single_quote = not in_single_quote
+        elif ch == "?" and not in_single_quote:
+            out.append("%s")
+        else:
+            out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _translate_sql_for_postgres(sql):
+    text = sql
+    if text.strip().lower() == "select last_insert_rowid()":
+        return "SELECT pg_catalog.lastval()"
+
+    text = re.sub(
+        r"CAST\s*\(\s*strftime\('%Y'\s*,\s*([^)]+)\)\s+AS\s+INTEGER\s*\)",
+        r"CAST(to_char((\1)::date, 'YYYY') AS INTEGER)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"strftime\('%Y-%m'\s*,\s*([^)]+)\)",
+        r"to_char((\1)::date, 'YYYY-MM')",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"strftime\('%w'\s*,\s*([^)]+)\)",
+        r"(CAST(EXTRACT(DOW FROM (\1)::date) AS INTEGER)::text)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    return _replace_qmarks_with_percent_s(text)
+
+
+class PostgresCursorCompat:
+    def __init__(self, raw_cursor):
+        self._cur = raw_cursor
+
+    def _rows_to_compat(self, rows):
+        if not rows:
+            return []
+        cols = [d.name if hasattr(d, "name") else d[0] for d in (self._cur.description or [])]
+        return [RowCompat(cols, row) for row in rows]
+
+    def execute(self, sql, args=()):
+        translated = _translate_sql_for_postgres(sql)
+        self._cur.execute(translated, tuple(args or ()))
+        return self
+
+    def executemany(self, sql, seq_of_args):
+        translated = _translate_sql_for_postgres(sql)
+        payload = [tuple(args or ()) for args in seq_of_args]
+        self._cur.executemany(translated, payload)
+        return self
+
+    def fetchone(self):
+        row = self._cur.fetchone()
+        if row is None:
+            return None
+        cols = [d.name if hasattr(d, "name") else d[0] for d in (self._cur.description or [])]
+        return RowCompat(cols, row)
+
+    def fetchall(self):
+        return self._rows_to_compat(self._cur.fetchall())
+
+    def fetchmany(self, size=None):
+        if size is None:
+            rows = self._cur.fetchmany()
+        else:
+            rows = self._cur.fetchmany(size)
+        return self._rows_to_compat(rows)
+
+    def __iter__(self):
+        return iter(self.fetchall())
+
+    @property
+    def rowcount(self):
+        return self._cur.rowcount
+
+    @property
+    def description(self):
+        return self._cur.description
+
+    def close(self):
+        self._cur.close()
+
+    def __getattr__(self, name):
+        return getattr(self._cur, name)
+
+
+class PostgresConnectionCompat:
+    def __init__(self, raw_conn):
+        self._conn = raw_conn
+
+    def cursor(self):
+        return PostgresCursorCompat(self._conn.cursor())
+
+    def execute(self, sql, args=()):
+        cur = self.cursor()
+        return cur.execute(sql, args)
+
+    def executemany(self, sql, seq_of_args):
+        cur = self.cursor()
+        return cur.executemany(sql, seq_of_args)
+
+    def commit(self):
+        self._conn.commit()
+
+    def rollback(self):
+        self._conn.rollback()
+
+    def close(self):
+        self._conn.close()
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
+def _connect_postgres():
+    import psycopg
+    return PostgresConnectionCompat(psycopg.connect(DATABASE_URL))
+
+
+def _connect_sqlite():
+    os.makedirs(os.path.dirname(DB_FILE), exist_ok=True)
+    conn = sqlite3.connect(DB_FILE, timeout=max(5, SQLITE_BUSY_TIMEOUT_MS // 1000))
+    conn.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def open_db_connection():
+    if USING_POSTGRES:
+        return _connect_postgres()
+    return _connect_sqlite()
+
 # ==========================================================
 # DATABASE
 # ==========================================================
 
 def get_db():
     if "_db" not in g:
-        os.makedirs(os.path.dirname(DB_FILE), exist_ok=True)
-        g._db = sqlite3.connect(DB_FILE, timeout=max(5, SQLITE_BUSY_TIMEOUT_MS // 1000))
-        g._db.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
-        g._db.row_factory = sqlite3.Row
+        g._db = open_db_connection()
     return g._db
 
 def query(sql, args=()):
@@ -240,109 +439,289 @@ def apply_security_headers(response):
 
 
 def _init_db_once():
-    os.makedirs(os.path.dirname(DB_FILE), exist_ok=True)
-    db = sqlite3.connect(DB_FILE, timeout=max(5, SQLITE_BUSY_TIMEOUT_MS // 1000))
+    db = open_db_connection()
     cur = db.cursor()
-    cur.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
-    cur.execute("PRAGMA journal_mode=WAL")
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS tasters (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            child TEXT,
-            programme TEXT,
-            location TEXT,
-            session TEXT,
-            class_name TEXT DEFAULT '',
-            taster_date DATE,
-            notes TEXT,
-            attended INTEGER DEFAULT 0,
-            club_fees INTEGER DEFAULT 0,
-            bg INTEGER DEFAULT 0,
-            badge INTEGER DEFAULT 0,
-            reschedule_contacted INTEGER DEFAULT 0
-        )
-    """)
+    if USING_POSTGRES:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS tasters (
+                id BIGINT PRIMARY KEY,
+                child TEXT,
+                programme TEXT,
+                location TEXT,
+                session TEXT,
+                class_name TEXT DEFAULT '',
+                taster_date DATE,
+                notes TEXT,
+                attended INTEGER DEFAULT 0,
+                club_fees INTEGER DEFAULT 0,
+                bg INTEGER DEFAULT 0,
+                badge INTEGER DEFAULT 0,
+                reschedule_contacted INTEGER DEFAULT 0
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS leavers (
+                id BIGINT PRIMARY KEY,
+                child TEXT NOT NULL,
+                programme TEXT NOT NULL,
+                leave_month TEXT NOT NULL,
+                leave_date TEXT DEFAULT '',
+                class_day TEXT DEFAULT '',
+                session TEXT DEFAULT '',
+                class_name TEXT DEFAULT '',
+                removed_la INTEGER DEFAULT 0,
+                removed_bg INTEGER DEFAULT 0,
+                added_to_board INTEGER DEFAULT 0,
+                reason TEXT DEFAULT '',
+                email TEXT DEFAULT '',
+                source TEXT DEFAULT 'import'
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS class_sessions (
+                id BIGINT PRIMARY KEY,
+                programme TEXT NOT NULL,
+                location TEXT NOT NULL,
+                session_date TEXT NOT NULL DEFAULT '',
+                day TEXT NOT NULL,
+                class_name TEXT NOT NULL,
+                start_time TEXT NOT NULL,
+                end_time TEXT NOT NULL DEFAULT '',
+                source_file TEXT DEFAULT ''
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id BIGINT PRIMARY KEY,
+                username TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                full_name TEXT NOT NULL DEFAULT '',
+                role TEXT NOT NULL DEFAULT 'staff',
+                password_must_change INTEGER NOT NULL DEFAULT 0,
+                email_weekly_reports INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS user_admin_days (
+                id BIGINT PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                day_name TEXT NOT NULL,
+                programme TEXT NOT NULL,
+                UNIQUE(user_id, day_name, programme)
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS audit_logs (
+                id BIGINT PRIMARY KEY,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                user_id BIGINT,
+                username TEXT NOT NULL DEFAULT '',
+                action TEXT NOT NULL,
+                entity_type TEXT NOT NULL DEFAULT '',
+                entity_id TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'ok',
+                details TEXT NOT NULL DEFAULT ''
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS login_attempts (
+                ip_key TEXT PRIMARY KEY,
+                count INTEGER NOT NULL DEFAULT 0,
+                window_start DOUBLE PRECISION NOT NULL DEFAULT 0,
+                locked_until DOUBLE PRECISION NOT NULL DEFAULT 0,
+                updated_at DOUBLE PRECISION NOT NULL DEFAULT 0
+            )
+        """)
+        cur.execute("ALTER TABLE leavers ADD COLUMN IF NOT EXISTS leave_month TEXT")
+        cur.execute("ALTER TABLE leavers ADD COLUMN IF NOT EXISTS leave_date TEXT DEFAULT ''")
+        cur.execute("ALTER TABLE leavers ADD COLUMN IF NOT EXISTS class_day TEXT DEFAULT ''")
+        cur.execute("ALTER TABLE leavers ADD COLUMN IF NOT EXISTS session TEXT DEFAULT ''")
+        cur.execute("ALTER TABLE leavers ADD COLUMN IF NOT EXISTS class_name TEXT DEFAULT ''")
+        cur.execute("ALTER TABLE leavers ADD COLUMN IF NOT EXISTS removed_la INTEGER DEFAULT 0")
+        cur.execute("ALTER TABLE leavers ADD COLUMN IF NOT EXISTS removed_bg INTEGER DEFAULT 0")
+        cur.execute("ALTER TABLE leavers ADD COLUMN IF NOT EXISTS added_to_board INTEGER DEFAULT 0")
+        cur.execute("ALTER TABLE leavers ADD COLUMN IF NOT EXISTS reason TEXT DEFAULT ''")
+        cur.execute("ALTER TABLE leavers ADD COLUMN IF NOT EXISTS email TEXT DEFAULT ''")
+        cur.execute("ALTER TABLE leavers ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'import'")
+        cur.execute("""
+            UPDATE leavers
+            SET leave_month = substring(leave_date from 1 for 7)
+            WHERE (leave_month IS NULL OR trim(leave_month) = '')
+              AND leave_date IS NOT NULL
+              AND trim(leave_date) <> ''
+        """)
+        cur.execute("ALTER TABLE class_sessions ADD COLUMN IF NOT EXISTS session_date TEXT NOT NULL DEFAULT ''")
+        cur.execute("ALTER TABLE class_sessions ADD COLUMN IF NOT EXISTS source_file TEXT DEFAULT ''")
+        cur.execute("ALTER TABLE tasters ADD COLUMN IF NOT EXISTS class_name TEXT DEFAULT ''")
+        cur.execute("ALTER TABLE tasters ADD COLUMN IF NOT EXISTS club_fees INTEGER DEFAULT 0")
+        cur.execute("ALTER TABLE tasters ADD COLUMN IF NOT EXISTS reschedule_contacted INTEGER DEFAULT 0")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name TEXT NOT NULL DEFAULT ''")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS password_must_change INTEGER NOT NULL DEFAULT 0")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS email_weekly_reports INTEGER NOT NULL DEFAULT 0")
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS leavers (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            child TEXT NOT NULL,
-            programme TEXT NOT NULL,
-            leave_month TEXT NOT NULL,
-            leave_date TEXT DEFAULT '',
-            class_day TEXT DEFAULT '',
-            session TEXT DEFAULT '',
-            class_name TEXT DEFAULT '',
-            removed_la INTEGER DEFAULT 0,
-            removed_bg INTEGER DEFAULT 0,
-            added_to_board INTEGER DEFAULT 0,
-            reason TEXT DEFAULT '',
-            email TEXT DEFAULT '',
-            source TEXT DEFAULT 'import'
-        )
-    """)
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS class_sessions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            programme TEXT NOT NULL,
-            location TEXT NOT NULL,
-            session_date TEXT NOT NULL DEFAULT '',
-            day TEXT NOT NULL,
-            class_name TEXT NOT NULL,
-            start_time TEXT NOT NULL,
-            end_time TEXT NOT NULL DEFAULT '',
-            source_file TEXT DEFAULT ''
-        )
-    """)
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT NOT NULL UNIQUE,
-            password_hash TEXT NOT NULL,
-            full_name TEXT NOT NULL DEFAULT '',
-            role TEXT NOT NULL DEFAULT 'staff',
-            password_must_change INTEGER NOT NULL DEFAULT 0,
-            email_weekly_reports INTEGER NOT NULL DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS user_admin_days (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            day_name TEXT NOT NULL,
-            programme TEXT NOT NULL,
-            UNIQUE(user_id, day_name, programme),
-            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-        )
-    """)
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS audit_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            user_id INTEGER,
-            username TEXT NOT NULL DEFAULT '',
-            action TEXT NOT NULL,
-            entity_type TEXT NOT NULL DEFAULT '',
-            entity_id TEXT NOT NULL DEFAULT '',
-            status TEXT NOT NULL DEFAULT 'ok',
-            details TEXT NOT NULL DEFAULT ''
-        )
-    """)
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS login_attempts (
-            ip_key TEXT PRIMARY KEY,
-            count INTEGER NOT NULL DEFAULT 0,
-            window_start REAL NOT NULL DEFAULT 0,
-            locked_until REAL NOT NULL DEFAULT 0,
-            updated_at REAL NOT NULL DEFAULT 0
-        )
-    """)
+        for table_name in ("users", "class_sessions", "tasters", "leavers", "user_admin_days", "audit_logs"):
+            seq_name = f"{table_name}_id_seq"
+            cur.execute(f"CREATE SEQUENCE IF NOT EXISTS {seq_name}")
+            max_id_row = cur.execute(f"SELECT COALESCE(MAX(id), 0) FROM {table_name}").fetchone()
+            max_id = int(max_id_row[0] or 0)
+            if max_id > 0:
+                cur.execute(f"SELECT setval('{seq_name}', {max_id}, true)")
+            else:
+                cur.execute(f"SELECT setval('{seq_name}', 1, false)")
+            cur.execute(f"ALTER SEQUENCE {seq_name} OWNED BY {table_name}.id")
+            cur.execute(
+                f"ALTER TABLE {table_name} ALTER COLUMN id SET DEFAULT nextval('{seq_name}')"
+            )
+    else:
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS tasters (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                child TEXT,
+                programme TEXT,
+                location TEXT,
+                session TEXT,
+                class_name TEXT DEFAULT '',
+                taster_date DATE,
+                notes TEXT,
+                attended INTEGER DEFAULT 0,
+                club_fees INTEGER DEFAULT 0,
+                bg INTEGER DEFAULT 0,
+                badge INTEGER DEFAULT 0,
+                reschedule_contacted INTEGER DEFAULT 0
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS leavers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                child TEXT NOT NULL,
+                programme TEXT NOT NULL,
+                leave_month TEXT NOT NULL,
+                leave_date TEXT DEFAULT '',
+                class_day TEXT DEFAULT '',
+                session TEXT DEFAULT '',
+                class_name TEXT DEFAULT '',
+                removed_la INTEGER DEFAULT 0,
+                removed_bg INTEGER DEFAULT 0,
+                added_to_board INTEGER DEFAULT 0,
+                reason TEXT DEFAULT '',
+                email TEXT DEFAULT '',
+                source TEXT DEFAULT 'import'
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS class_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                programme TEXT NOT NULL,
+                location TEXT NOT NULL,
+                session_date TEXT NOT NULL DEFAULT '',
+                day TEXT NOT NULL,
+                class_name TEXT NOT NULL,
+                start_time TEXT NOT NULL,
+                end_time TEXT NOT NULL DEFAULT '',
+                source_file TEXT DEFAULT ''
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                full_name TEXT NOT NULL DEFAULT '',
+                role TEXT NOT NULL DEFAULT 'staff',
+                password_must_change INTEGER NOT NULL DEFAULT 0,
+                email_weekly_reports INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS user_admin_days (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                day_name TEXT NOT NULL,
+                programme TEXT NOT NULL,
+                UNIQUE(user_id, day_name, programme),
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS audit_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                user_id INTEGER,
+                username TEXT NOT NULL DEFAULT '',
+                action TEXT NOT NULL,
+                entity_type TEXT NOT NULL DEFAULT '',
+                entity_id TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'ok',
+                details TEXT NOT NULL DEFAULT ''
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS login_attempts (
+                ip_key TEXT PRIMARY KEY,
+                count INTEGER NOT NULL DEFAULT 0,
+                window_start REAL NOT NULL DEFAULT 0,
+                locked_until REAL NOT NULL DEFAULT 0,
+                updated_at REAL NOT NULL DEFAULT 0
+            )
+        """)
+        # Backward-compat: old DBs may still use leave_date only.
+        leaver_cols = {
+            row[1] for row in cur.execute("PRAGMA table_info(leavers)")
+        }
+        if "leave_month" not in leaver_cols and "leave_date" in leaver_cols:
+            cur.execute("ALTER TABLE leavers ADD COLUMN leave_month TEXT")
+            cur.execute("""
+                UPDATE leavers
+                SET leave_month = substr(leave_date, 1, 7)
+                WHERE leave_month IS NULL
+            """)
+        if "leave_date" not in leaver_cols:
+            cur.execute("ALTER TABLE leavers ADD COLUMN leave_date TEXT DEFAULT ''")
+        if "class_day" not in leaver_cols:
+            cur.execute("ALTER TABLE leavers ADD COLUMN class_day TEXT DEFAULT ''")
+        if "session" not in leaver_cols:
+            cur.execute("ALTER TABLE leavers ADD COLUMN session TEXT DEFAULT ''")
+        if "class_name" not in leaver_cols:
+            cur.execute("ALTER TABLE leavers ADD COLUMN class_name TEXT DEFAULT ''")
+        if "removed_la" not in leaver_cols:
+            cur.execute("ALTER TABLE leavers ADD COLUMN removed_la INTEGER DEFAULT 0")
+        if "removed_bg" not in leaver_cols:
+            cur.execute("ALTER TABLE leavers ADD COLUMN removed_bg INTEGER DEFAULT 0")
+        if "added_to_board" not in leaver_cols:
+            cur.execute("ALTER TABLE leavers ADD COLUMN added_to_board INTEGER DEFAULT 0")
+        if "reason" not in leaver_cols:
+            cur.execute("ALTER TABLE leavers ADD COLUMN reason TEXT DEFAULT ''")
+        if "email" not in leaver_cols:
+            cur.execute("ALTER TABLE leavers ADD COLUMN email TEXT DEFAULT ''")
+        class_cols = {
+            row[1] for row in cur.execute("PRAGMA table_info(class_sessions)")
+        }
+        if "session_date" not in class_cols:
+            cur.execute(
+                "ALTER TABLE class_sessions ADD COLUMN session_date TEXT NOT NULL DEFAULT ''"
+            )
+        taster_cols = {
+            row[1] for row in cur.execute("PRAGMA table_info(tasters)")
+        }
+        if "class_name" not in taster_cols:
+            cur.execute("ALTER TABLE tasters ADD COLUMN class_name TEXT DEFAULT ''")
+        if "club_fees" not in taster_cols:
+            cur.execute("ALTER TABLE tasters ADD COLUMN club_fees INTEGER DEFAULT 0")
+        if "reschedule_contacted" not in taster_cols:
+            cur.execute("ALTER TABLE tasters ADD COLUMN reschedule_contacted INTEGER DEFAULT 0")
+        user_cols = {
+            row[1] for row in cur.execute("PRAGMA table_info(users)")
+        }
+        if "full_name" not in user_cols:
+            cur.execute("ALTER TABLE users ADD COLUMN full_name TEXT NOT NULL DEFAULT ''")
+        if "password_must_change" not in user_cols:
+            cur.execute("ALTER TABLE users ADD COLUMN password_must_change INTEGER NOT NULL DEFAULT 0")
+        if "email_weekly_reports" not in user_cols:
+            cur.execute("ALTER TABLE users ADD COLUMN email_weekly_reports INTEGER NOT NULL DEFAULT 0")
 
     cur.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS uniq_taster
@@ -360,73 +739,6 @@ def _init_db_once():
         CREATE INDEX IF NOT EXISTS idx_login_attempts_updated_at
         ON login_attempts (updated_at DESC)
     """)
-    # Backward-compat: old DBs may still use leave_date only.
-    leaver_cols = {
-        row[1] for row in cur.execute("PRAGMA table_info(leavers)")
-    }
-    if "leave_month" not in leaver_cols and "leave_date" in leaver_cols:
-        cur.execute("ALTER TABLE leavers ADD COLUMN leave_month TEXT")
-        cur.execute("""
-            UPDATE leavers
-            SET leave_month = substr(leave_date, 1, 7)
-            WHERE leave_month IS NULL
-        """)
-    if "leave_date" not in leaver_cols:
-        cur.execute("ALTER TABLE leavers ADD COLUMN leave_date TEXT DEFAULT ''")
-    if "class_day" not in leaver_cols:
-        cur.execute("ALTER TABLE leavers ADD COLUMN class_day TEXT DEFAULT ''")
-    if "session" not in leaver_cols:
-        cur.execute("ALTER TABLE leavers ADD COLUMN session TEXT DEFAULT ''")
-    if "class_name" not in leaver_cols:
-        cur.execute("ALTER TABLE leavers ADD COLUMN class_name TEXT DEFAULT ''")
-    if "removed_la" not in leaver_cols:
-        cur.execute("ALTER TABLE leavers ADD COLUMN removed_la INTEGER DEFAULT 0")
-    if "removed_bg" not in leaver_cols:
-        cur.execute("ALTER TABLE leavers ADD COLUMN removed_bg INTEGER DEFAULT 0")
-    if "added_to_board" not in leaver_cols:
-        cur.execute("ALTER TABLE leavers ADD COLUMN added_to_board INTEGER DEFAULT 0")
-    if "reason" not in leaver_cols:
-        cur.execute("ALTER TABLE leavers ADD COLUMN reason TEXT DEFAULT ''")
-    if "email" not in leaver_cols:
-        cur.execute("ALTER TABLE leavers ADD COLUMN email TEXT DEFAULT ''")
-
-    class_cols = {
-        row[1] for row in cur.execute("PRAGMA table_info(class_sessions)")
-    }
-    if "session_date" not in class_cols:
-        cur.execute(
-            "ALTER TABLE class_sessions ADD COLUMN session_date TEXT NOT NULL DEFAULT ''"
-        )
-
-    taster_cols = {
-        row[1] for row in cur.execute("PRAGMA table_info(tasters)")
-    }
-    if "class_name" not in taster_cols:
-        cur.execute("ALTER TABLE tasters ADD COLUMN class_name TEXT DEFAULT ''")
-    if "club_fees" not in taster_cols:
-        cur.execute("ALTER TABLE tasters ADD COLUMN club_fees INTEGER DEFAULT 0")
-    if "reschedule_contacted" not in taster_cols:
-        cur.execute("ALTER TABLE tasters ADD COLUMN reschedule_contacted INTEGER DEFAULT 0")
-    # Keep session format consistent: time-only (e.g. 16:00), no weekday prefix.
-    for day_name in (
-        "Monday", "Tuesday", "Wednesday", "Thursday",
-        "Friday", "Saturday", "Sunday"
-    ):
-        cur.execute(
-            "UPDATE tasters SET session=trim(substr(session, ?)) WHERE session LIKE ?",
-            (len(day_name) + 2, f"{day_name} %")
-        )
-
-    user_cols = {
-        row[1] for row in cur.execute("PRAGMA table_info(users)")
-    }
-    if "full_name" not in user_cols:
-        cur.execute("ALTER TABLE users ADD COLUMN full_name TEXT NOT NULL DEFAULT ''")
-    if "password_must_change" not in user_cols:
-        cur.execute("ALTER TABLE users ADD COLUMN password_must_change INTEGER NOT NULL DEFAULT 0")
-    if "email_weekly_reports" not in user_cols:
-        cur.execute("ALTER TABLE users ADD COLUMN email_weekly_reports INTEGER NOT NULL DEFAULT 0")
-
     cur.execute("DROP INDEX IF EXISTS uniq_class_session")
     cur.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS uniq_class_session
@@ -435,6 +747,22 @@ def _init_db_once():
             class_name, start_time, end_time
         )
     """)
+
+    # Keep session format consistent: time-only (e.g. 16:00), no weekday prefix.
+    for day_name in (
+        "Monday", "Tuesday", "Wednesday", "Thursday",
+        "Friday", "Saturday", "Sunday"
+    ):
+        if USING_POSTGRES:
+            cur.execute(
+                "UPDATE tasters SET session=trim(substring(session from ?)) WHERE session LIKE ?",
+                (len(day_name) + 2, f"{day_name} %"),
+            )
+        else:
+            cur.execute(
+                "UPDATE tasters SET session=trim(substr(session, ?)) WHERE session LIKE ?",
+                (len(day_name) + 2, f"{day_name} %"),
+            )
 
     users_count = cur.execute("SELECT COUNT(*) FROM users").fetchone()[0]
     owner_bootstrap_password = os.environ.get("TASTERIST_OWNER_BOOTSTRAP_PASSWORD", "").strip()
@@ -520,15 +848,20 @@ def init_db():
         try:
             _init_db_once()
             return
-        except sqlite3.OperationalError as exc:
-            locked = "locked" in str(exc).lower()
-            if not locked or attempt == DB_INIT_MAX_RETRIES:
-                raise
-            print(f"⚠️ DB init lock detected, retrying ({attempt}/{DB_INIT_MAX_RETRIES})...")
-            time.sleep(1.5)
+        except Exception as exc:
+            msg = str(exc).lower()
+            retryable_sqlite = (not USING_POSTGRES) and isinstance(exc, sqlite3.OperationalError) and "locked" in msg
+            retryable_pg = USING_POSTGRES and ("could not connect" in msg or "connection refused" in msg or "timeout" in msg)
+            if (retryable_sqlite or retryable_pg) and attempt < DB_INIT_MAX_RETRIES:
+                print(f"⚠️ DB init retry ({attempt}/{DB_INIT_MAX_RETRIES}): {exc}")
+                time.sleep(1.5)
+                continue
+            raise
 
 
 def maybe_restore_sqlite_from_postgres():
+    if USING_POSTGRES:
+        return
     auto_raw = os.environ.get("TASTERIST_AUTO_RESTORE_FROM_POSTGRES")
     # Safety-first: explicit opt-in only.
     auto_enabled = False if auto_raw is None else auto_raw.strip().lower() in {"1", "true", "yes", "on"}
@@ -1419,6 +1752,22 @@ def send_weekly_admin_report(trigger="manual"):
 
 
 def run_import_process(trigger="manual", replace=False):
+    if USING_POSTGRES:
+        log_text = (
+            "Import runner is disabled while Postgres is the primary runtime database. "
+            "Use the migration/sync scripts for controlled imports."
+        )
+        os.makedirs(os.path.dirname(IMPORT_LOG_FILE), exist_ok=True)
+        with open(IMPORT_LOG_FILE, "w", encoding="utf-8") as f:
+            f.write(log_text + "\n")
+        with open(IMPORT_META_FILE, "w", encoding="utf-8") as f:
+            json.dump({
+                "run_at": datetime.now().isoformat(timespec="seconds"),
+                "exit_code": 2,
+                "trigger": trigger,
+            }, f)
+        return 2, log_text
+
     if replace and not destructive_imports_enabled():
         print("⚠️ Replace-all import requested but blocked (TASTERIST_ALLOW_DESTRUCTIVE_IMPORTS is off).")
         replace = False
@@ -1506,7 +1855,6 @@ def run_import_process(trigger="manual", replace=False):
 # ==========================================================
 
 def load_tasters_df(programme=None):
-    db = get_db()
     q = "SELECT * FROM tasters"
     args = []
 
@@ -1516,7 +1864,12 @@ def load_tasters_df(programme=None):
 
     q += " ORDER BY taster_date, session, child"
 
-    df = pd.read_sql_query(q, db, params=args)
+    if USING_POSTGRES:
+        rows = query(q, tuple(args))
+        df = pd.DataFrame([dict(r) for r in rows])
+    else:
+        db = get_db()
+        df = pd.read_sql_query(q, db, params=args)
     if not df.empty:
         df["taster_date"] = pd.to_datetime(df["taster_date"]).dt.date
         if "session" in df.columns:
@@ -1583,9 +1936,7 @@ def shift_time_value_to_pm(value):
 
 
 def run_pm_time_fix(force=False, include_preschool=False):
-    conn = sqlite3.connect(DB_FILE, timeout=max(5, SQLITE_BUSY_TIMEOUT_MS // 1000))
-    conn.row_factory = sqlite3.Row
-    conn.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
+    conn = open_db_connection()
     cur = conn.cursor()
 
     # Skip repeated auto-fix passes once an auto run has already been recorded.
@@ -3898,27 +4249,19 @@ def health():
 @app.route("/cloud/preflight")
 @admin_required
 def cloud_preflight():
-    db_path = Path(DB_FILE)
-    db_parent = db_path.parent
     sheets_path = Path(get_import_source_folder()).expanduser()
-    local_taster_count = get_db().execute("SELECT COUNT(*) c FROM tasters").fetchone()["c"]
-    postgres_url = os.environ.get("DATABASE_URL", "").strip()
+    db_taster_count = get_db().execute("SELECT COUNT(*) c FROM tasters").fetchone()["c"]
+    postgres_url = DATABASE_URL
 
     def status(ok, ok_label="OK", bad_label="Needs Attention"):
         return ok_label if ok else bad_label
 
     checks = [
         {
-            "name": "Database Directory",
-            "path": str(db_parent),
-            "ok": db_parent.exists() and os.access(db_parent, os.W_OK),
-            "detail": "Must exist and be writable by the app process.",
-        },
-        {
-            "name": "Database File",
-            "path": str(db_path),
-            "ok": (db_path.exists() and os.access(db_path, os.W_OK)) or (not db_path.exists() and os.access(db_parent, os.W_OK)),
-            "detail": "Either writable existing file or writable parent for first create.",
+            "name": "Runtime DB Backend",
+            "path": DB_BACKEND,
+            "ok": True,
+            "detail": "Should match your production storage strategy.",
         },
         {
             "name": "Import Sheets Folder",
@@ -3927,18 +4270,34 @@ def cloud_preflight():
             "detail": "Folder must be readable in cloud for imports.",
         },
         {
-            "name": "SQLite Tasters Rows",
-            "path": str(local_taster_count),
-            "ok": int(local_taster_count or 0) > 0,
+            "name": ("Postgres Tasters Rows" if USING_POSTGRES else "SQLite Tasters Rows"),
+            "path": str(db_taster_count),
+            "ok": int(db_taster_count or 0) > 0,
             "detail": "Should be non-zero for production dashboard data.",
         },
         {
             "name": "DATABASE_URL",
             "path": "Configured" if postgres_url else "Missing",
             "ok": bool(postgres_url),
-            "detail": "Required for Postgres backup/restore operations.",
+            "detail": "Required for Postgres runtime and backup/restore operations.",
         },
     ]
+
+    if not USING_POSTGRES:
+        db_path = Path(DB_FILE)
+        db_parent = db_path.parent
+        checks.insert(1, {
+            "name": "Database Directory",
+            "path": str(db_parent),
+            "ok": db_parent.exists() and os.access(db_parent, os.W_OK),
+            "detail": "Must exist and be writable by the app process.",
+        })
+        checks.insert(2, {
+            "name": "Database File",
+            "path": str(db_path),
+            "ok": (db_path.exists() and os.access(db_path, os.W_OK)) or (not db_path.exists() and os.access(db_parent, os.W_OK)),
+            "detail": "Either writable existing file or writable parent for first create.",
+        })
     if postgres_url:
         pg_ok = False
         pg_path = "Unavailable"
@@ -3959,7 +4318,7 @@ def cloud_preflight():
             pg_detail = "Check DATABASE_URL value, network, and Postgres availability."
 
         checks.append({
-            "name": "Postgres Tasters Rows",
+            "name": "Postgres Direct Rows",
             "path": pg_path,
             "ok": pg_ok,
             "detail": pg_detail,
@@ -3988,6 +4347,10 @@ def cloud_preflight():
 @app.route("/cloud/restore-from-postgres", methods=["POST"])
 @admin_required
 def cloud_restore_from_postgres():
+    if USING_POSTGRES:
+        flash("Runtime already uses Postgres directly. Restore to SQLite is not required.", "info")
+        return redirect(url_for("cloud_preflight"))
+
     postgres_url = os.environ.get("DATABASE_URL", "").strip()
     if not postgres_url:
         flash("DATABASE_URL is not set; cannot restore from Postgres.", "danger")
@@ -4040,6 +4403,10 @@ def cloud_restore_from_postgres():
 @app.route("/cloud/backup")
 @admin_required
 def cloud_backup():
+    if USING_POSTGRES:
+        flash("SQLite backup download is unavailable in Postgres runtime. Use Render Postgres backups.", "warning")
+        return redirect(url_for("cloud_preflight"))
+
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
     backup_name = f"tasterist-backup-{ts}.db"
     tmp_file = tempfile.NamedTemporaryFile(prefix="tasterist-backup-", suffix=".db", delete=False)
@@ -4082,8 +4449,9 @@ def import_page():
         "user_count": db.execute("SELECT COUNT(*) c FROM users").fetchone()["c"],
         "taster_count": db.execute("SELECT COUNT(*) c FROM tasters").fetchone()["c"],
         "leaver_count": db.execute("SELECT COUNT(*) c FROM leavers").fetchone()["c"],
-        "db_file": str(db_path),
-        "db_exists": db_path.exists(),
+        "db_file": redact_database_url(DATABASE_URL) if USING_POSTGRES else str(db_path),
+        "db_exists": True if USING_POSTGRES else db_path.exists(),
+        "db_backend": DB_BACKEND,
         "import_source": str(import_root),
         "import_source_exists": import_root.exists(),
         "xlsx_count": xlsx_count,
@@ -4152,6 +4520,8 @@ def import_upload():
         )
         if rc == 0:
             flash("Import complete after upload.", "success")
+        elif rc == 2 and USING_POSTGRES:
+            flash("Upload complete. Import execution is disabled in Postgres runtime.", "warning")
         else:
             flash("Upload complete, but import finished with warnings/errors.", "warning")
 
@@ -4179,6 +4549,8 @@ def import_run():
     )
     if rc == 0:
         flash("Import complete", "success")
+    elif rc == 2 and USING_POSTGRES:
+        flash("Import execution is disabled in Postgres runtime.", "warning")
     else:
         flash("Import finished with warnings/errors. Check the log.", "warning")
     return redirect(url_for("import_page"))
@@ -4207,12 +4579,14 @@ maybe_restore_sqlite_from_postgres()
 maybe_auto_fix_pm_times()
 
 try:
-    _boot_db = sqlite3.connect(DB_FILE)
+    _boot_db = open_db_connection()
     _boot_count = _boot_db.execute("SELECT COUNT(*) FROM tasters").fetchone()[0]
     _boot_db.close()
-    print(f"🗄️ DB ready: {DB_FILE} | tasters={_boot_count}")
+    _boot_target = "postgres" if USING_POSTGRES else DB_FILE
+    print(f"🗄️ DB ready: backend={DB_BACKEND} target={_boot_target} | tasters={_boot_count}")
 except Exception as exc:
-    print(f"⚠️ DB startup check failed for {DB_FILE}: {exc}")
+    _boot_target = "postgres" if USING_POSTGRES else DB_FILE
+    print(f"⚠️ DB startup check failed for backend={DB_BACKEND} target={_boot_target}: {exc}")
 
 if __name__ == "__main__":
     app.run(debug=is_env_true("TASTERIST_DEBUG", "0"), port=8501)

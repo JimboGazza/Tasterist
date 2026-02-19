@@ -11,8 +11,10 @@ services:
         generateValue: true
       - key: TASTERIST_DB_FILE
         value: /var/data/tasterist.db
+      - key: TASTERIST_DB_BACKEND
+        value: postgres
       - key: TASTER_SHEETS_FOLDER
-        value: /var/data/taster-sheets
+        value: /tmp/taster-sheets
       - key: TASTERIST_IMPORT_TIMEOUT_SEC
         value: "120"
       - key: TASTERIST_CANONICAL_HOST
