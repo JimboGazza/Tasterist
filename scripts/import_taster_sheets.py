@@ -260,7 +260,7 @@ def import_excel(path, conn):
 
     def infer_class_details(programme_key, day_name, start_time, iso_date):
         if not start_time:
-            return "", ""
+            return "", "", False
 
         for candidate in time_candidates(start_time):
             row = cur.execute("""
@@ -271,7 +271,7 @@ def import_excel(path, conn):
                 LIMIT 1
             """, (programme_key, iso_date, candidate)).fetchone()
             if row:
-                return row[0] or "", candidate
+                return row[0] or "", candidate, True
 
         weekday = day_name
         if not weekday:
@@ -289,8 +289,8 @@ def import_excel(path, conn):
                 LIMIT 1
             """, (programme_key, weekday, candidate)).fetchone()
             if row:
-                return row[0] or "", candidate
-        return "", start_time
+                return row[0] or "", candidate, True
+        return "", start_time, False
 
     tasters_inserted = 0
     leavers_inserted = 0
@@ -408,13 +408,28 @@ def import_excel(path, conn):
                     continue
 
                 effective_date = parsed or block_state[col]["date"] or sheet_default_date
-                class_name, inferred_session = infer_class_details(
+                class_name, inferred_session, class_matched = infer_class_details(
                     programme,
                     block_state[col]["day"],
                     block_state[col]["time"],
                     effective_date
                 )
                 session = inferred_session or (block_state[col]["time"] or "")
+                weekday_name = block_state[col]["day"]
+                if not weekday_name:
+                    try:
+                        weekday_name = datetime.fromisoformat(effective_date).strftime("%A")
+                    except ValueError:
+                        weekday_name = ""
+
+                # Defensive guard: preschool has no Saturday sessions in configured templates.
+                # Skip orphan rows instead of importing misleading Saturday records.
+                if programme == "preschool" and weekday_name == "Saturday" and not class_matched:
+                    print(
+                        f"   ⚠️ SKIP orphan preschool Saturday row: "
+                        f"name={name} date={effective_date} time={session or '-'}"
+                    )
+                    continue
 
                 note_val = ws.cell(r, notes_col).value if notes_col <= ws.max_column else ""
 
