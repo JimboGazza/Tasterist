@@ -132,7 +132,9 @@ async function handleWebhook(request, env) {
     try {
       // EmailMessage body stream is single-use. Rebuild per attempt.
       const raw = buildMime({ fromHeader, to: toAddr, subject, text, html });
-      const message = new EmailMessage(fromAddr, toAddr, raw);
+      // For destination_address bindings, Cloudflare supports null/undefined
+      // recipient and resolves the bound destination automatically.
+      const message = new EmailMessage(fromAddr, null, raw);
       await env.TASTERIST_SEND.send(message);
       return json({ ok: true, to: toAddr, attempt });
     } catch (err) {
