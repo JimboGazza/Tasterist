@@ -55,6 +55,37 @@ function buildMime({ fromHeader, to, subject, text, html }) {
   ].join("\r\n");
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function formatError(err) {
+  if (!err) {
+    return "Unknown error";
+  }
+  if (typeof err === "string") {
+    return err;
+  }
+  const parts = [];
+  if (err.name) {
+    parts.push(String(err.name));
+  }
+  if (err.message) {
+    parts.push(String(err.message));
+  }
+  if (err.cause) {
+    parts.push(`cause=${String(err.cause)}`);
+  }
+  if (parts.length > 0) {
+    return parts.join(": ");
+  }
+  try {
+    return JSON.stringify(err);
+  } catch (_jsonErr) {
+    return String(err);
+  }
+}
+
 async function handleWebhook(request, env) {
   if (request.method === "GET") {
     return json({ ok: true, service: "tasterist-email-webhook" });
@@ -91,12 +122,20 @@ async function handleWebhook(request, env) {
   const raw = buildMime({ fromHeader, to: toAddr, subject, text, html });
   const message = new EmailMessage(fromAddr, toAddr, raw);
 
-  try {
-    await env.TASTERIST_SEND.send(message);
-    return json({ ok: true, to: toAddr });
-  } catch (err) {
-    return json({ error: "send_failed", detail: String(err) }, 502);
+  const maxAttempts = 3;
+  let lastErr = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      await env.TASTERIST_SEND.send(message);
+      return json({ ok: true, to: toAddr, attempt });
+    } catch (err) {
+      lastErr = err;
+      if (attempt < maxAttempts) {
+        await sleep(attempt * 250);
+      }
+    }
   }
+  return json({ error: "send_failed", detail: formatError(lastErr) }, 502);
 }
 
 async function handleScheduled(env) {
