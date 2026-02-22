@@ -7,6 +7,7 @@
       <p class="text-white mb-0">Search and filter all records in one list.</p>
     </div>
     <div class="d-flex gap-2 flex-wrap">
+      <a href="{{ url_for('taster_changelog') }}" class="btn btn-glass">Taster Changelog</a>
       {% if is_owner_user %}
       <form method="post" action="{{ url_for('admin_fix_pm_times') }}">
         {{ csrf_field() }}
@@ -80,6 +81,7 @@
                 <th>BG</th>
                 <th>Badge</th>
                 <th>Notes / Source</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody id="recordTableBody">
@@ -106,6 +108,16 @@
                   <div class="dashboard-subtle">Location: {{ t.location or "—" }}</div>
                   {% if t.unknown_class %}
                   <div class="dashboard-subtle text-warning">{{ t.diagnostic_text or "Unknown class/day details" }}</div>
+                  {% endif %}
+                </td>
+                <td>
+                  {% if is_admin_user %}
+                  <form method="post" action="{{ url_for('delete_taster', taster_id=t.id) }}" onsubmit="return confirm('Remove this taster from the app database?');">
+                    {{ csrf_field() }}
+                    <button type="submit" class="btn btn-sm btn-outline-danger">Remove</button>
+                  </form>
+                  {% else %}
+                  —
                   {% endif %}
                 </td>
               </tr>
@@ -136,6 +148,7 @@
                   <div class="dashboard-subtle text-warning">{{ l.diagnostic_text or "Unknown class/day details" }}</div>
                   {% endif %}
                 </td>
+                <td>—</td>
               </tr>
               {% endfor %}
             </tbody>

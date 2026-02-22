@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container-fluid mt-2">
+  <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+    <div>
+      <h2 class="text-white mb-1">Taster Changelog</h2>
+      <p class="text-white mb-0">Latest taster actions to mirror in Excel sheets.</p>
+    </div>
+    <div class="d-flex gap-2 flex-wrap">
+      <a href="{{ url_for('all_tasters') }}" class="btn btn-glass">Back to Find Taster</a>
+      <a href="{{ url_for('dashboard') }}" class="btn btn-glass">Back to Dashboard</a>
+    </div>
+  </div>
+
+  <div class="table-card mb-3">
+    <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+      <input id="changelogSearch" class="form-control" style="max-width: 360px;" placeholder="Search child, class, session, date...">
+      <span id="changelogCount" class="table-result-chip"></span>
+    </div>
+    <div class="table-responsive">
+      <table class="table table-dark table-striped table-sm align-middle mb-0">
+        <thead>
+          <tr>
+            <th>Task</th>
+            <th>When</th>
+            <th>By</th>
+            <th>Name</th>
+            <th>Programme</th>
+            <th>Class</th>
+            <th>Session</th>
+            <th>Date / Detail</th>
+          </tr>
+        </thead>
+        <tbody id="changelogTableBody">
+          {% for r in changelog %}
+          <tr data-search="{{ (r.task ~ ' ' ~ r.created_at ~ ' ' ~ r.username ~ ' ' ~ r.child ~ ' ' ~ r.programme ~ ' ' ~ (r.class_name or '') ~ ' ' ~ (r.session or '') ~ ' ' ~ (r.date_text or '') ~ ' ' ~ (r.details or ''))|lower }}">
+            <td><span class="table-flag {{ r.task_class }}">{{ r.task }}</span></td>
+            <td>{{ r.created_at|uk_datetime }}</td>
+            <td>{{ r.username }}</td>
+            <td>{{ r.child }}</td>
+            <td>{{ r.programme|title }}</td>
+            <td>{{ r.class_name or "—" }}</td>
+            <td>{{ r.session or "—" }}</td>
+            <td>{{ r.date_text or "—" }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+const changelogRows = Array.from(document.querySelectorAll("#changelogTableBody tr"));
+const changelogSearch = document.getElementById("changelogSearch");
+const changelogCount = document.getElementById("changelogCount");
+
+function applyChangelogFilter() {
+  const query = (changelogSearch.value || "").trim().toLowerCase();
+  let shown = 0;
+  changelogRows.forEach((row) => {
+    if (query && !(row.dataset.search || "").includes(query)) {
+      row.classList.add("d-none");
+      return;
+    }
+    row.classList.remove("d-none");
+    shown += 1;
+  });
+  changelogCount.textContent = `${shown} shown`;
+}
+
+changelogSearch.addEventListener("input", applyChangelogFilter);
+applyChangelogFilter();
+</script>
+{% endblock %}

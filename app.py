@@ -50,6 +50,7 @@ LOCAL_DB_FILE = os.path.join(LOCAL_DB_DIR, "tasterist.db")
 LOCAL_SHEETS_FALLBACK = os.path.join(DATA_DIR, "taster_sheets")
 IMPORT_PREVIEW_DIR = os.path.join(DATA_DIR, "import_previews")
 IMPORT_SCRIPT = os.path.join(BASE_DIR, "scripts", "import_taster_sheets.py")
+VERSION_FILE = Path(BASE_DIR) / "VERSION"
 DEFAULT_DB_FILE = (
     "/var/data/tasterist.db"
     if (os.environ.get("RENDER") or os.environ.get("TASTERIST_CANONICAL_HOST"))
@@ -105,6 +106,22 @@ if DB_BACKEND not in {"sqlite", "postgres"}:
 if DB_BACKEND == "postgres" and not DATABASE_URL:
     DB_BACKEND = "sqlite"
 USING_POSTGRES = DB_BACKEND == "postgres"
+
+
+def load_app_version():
+    override = os.environ.get("TASTERIST_APP_VERSION", "").strip()
+    if override:
+        return override
+    try:
+        raw = VERSION_FILE.read_text(encoding="utf-8").strip()
+        if raw:
+            return raw
+    except OSError:
+        pass
+    return "0.0.0"
+
+
+APP_VERSION = load_app_version()
 
 
 def is_env_true(name, default="0"):
@@ -1396,6 +1413,7 @@ def inject_current_user():
         "user_initials": user_initials,
         "csrf_token": get_csrf_token,
         "csrf_field": csrf_field,
+        "app_version": APP_VERSION,
     }
 
 
@@ -4559,6 +4577,159 @@ def all_tasters():
         leavers.append(item)
 
     return render_template("all_tasters.html", tasters=tasters, leavers=leavers)
+
+
+def _parse_taster_audit_details(details):
+    text = str(details or "").strip()
+    parts = [p.strip() for p in text.split("|")]
+    payload = {
+        "child": "",
+        "programme": "",
+        "date_session": "",
+        "extra": text,
+    }
+    if len(parts) >= 1:
+        payload["child"] = parts[0]
+    if len(parts) >= 2:
+        payload["programme"] = parts[1]
+    if len(parts) >= 3:
+        payload["date_session"] = parts[2]
+    return payload
+
+
+@app.route("/tasters/changelog")
+def taster_changelog():
+    db = get_db()
+    rows = db.execute(
+        """
+        SELECT id, created_at, username, action, entity_id, details
+        FROM audit_logs
+        WHERE entity_type='taster'
+          AND action IN ('add_taster', 'add_taster_manual', 'delete_taster')
+        ORDER BY id DESC
+        LIMIT 2000
+        """
+    ).fetchall()
+
+    latest_by_entity = {}
+    for row in rows:
+        entity_id = str(row["entity_id"] or "").strip()
+        if not entity_id or entity_id in latest_by_entity:
+            continue
+        latest_by_entity[entity_id] = dict(row)
+
+    taster_ids = []
+    for entity_id in latest_by_entity:
+        try:
+            taster_ids.append(int(entity_id))
+        except ValueError:
+            continue
+
+    existing_map = {}
+    if taster_ids:
+        placeholders = ",".join("?" for _ in taster_ids)
+        existing_rows = db.execute(
+            f"""
+            SELECT id, child, programme, class_name, session, taster_date
+            FROM tasters
+            WHERE id IN ({placeholders})
+            """,
+            tuple(taster_ids),
+        ).fetchall()
+        existing_map = {int(r["id"]): dict(r) for r in existing_rows}
+
+    changelog = []
+    for entity_id, row in latest_by_entity.items():
+        action = row["action"]
+        parsed = _parse_taster_audit_details(row["details"])
+        taster_row = None
+        try:
+            taster_row = existing_map.get(int(entity_id))
+        except ValueError:
+            taster_row = None
+
+        if action in {"add_taster", "add_taster_manual"}:
+            task = "Add to Sheet"
+            task_class = "is-yes"
+            if taster_row:
+                child = taster_row["child"]
+                programme = taster_row["programme"]
+                class_name = taster_row["class_name"]
+                session = taster_row["session"]
+                date_text = taster_row["taster_date"]
+            else:
+                child = parsed["child"] or "Unknown"
+                programme = parsed["programme"] or "Unknown"
+                class_name = ""
+                session = ""
+                date_text = parsed["date_session"]
+        else:
+            task = "Remove from Sheet"
+            task_class = "is-no"
+            child = parsed["child"] or "Unknown"
+            programme = parsed["programme"] or "Unknown"
+            class_name = ""
+            session = ""
+            date_text = parsed["date_session"]
+
+        changelog.append(
+            {
+                "created_at": row["created_at"],
+                "username": row["username"] or "system",
+                "task": task,
+                "task_class": task_class,
+                "child": child,
+                "programme": programme,
+                "class_name": class_name,
+                "session": session,
+                "date_text": date_text,
+                "details": row["details"] or "",
+                "entity_id": entity_id,
+            }
+        )
+
+    changelog.sort(key=lambda x: str(x["created_at"]), reverse=True)
+    return render_template("taster_changelog.html", changelog=changelog)
+
+
+@app.route("/tasters/<int:taster_id>/delete", methods=["POST"])
+def delete_taster(taster_id):
+    user = current_user()
+    if not is_admin_user(user):
+        abort(403)
+
+    db = get_db()
+    row = db.execute(
+        """
+        SELECT id, child, programme, taster_date, session, class_name
+        FROM tasters
+        WHERE id=?
+        """,
+        (taster_id,),
+    ).fetchone()
+    if not row:
+        flash("Taster not found.", "warning")
+        return redirect(url_for("all_tasters"))
+
+    child = str(row["child"] or "").strip()
+    programme = str(row["programme"] or "").strip()
+    taster_date = str(row["taster_date"] or "").strip()
+    session = str(row["session"] or "").strip()
+    class_name = str(row["class_name"] or "").strip()
+
+    db.execute("DELETE FROM tasters WHERE id=?", (taster_id,))
+    db.commit()
+
+    log_audit(
+        "delete_taster",
+        entity_type="taster",
+        entity_id=taster_id,
+        status="warn",
+        details=f"{child} | {programme} | {taster_date} {session} | class={class_name}",
+    )
+
+    flash(f"Removed taster: {child}", "success")
+    return redirect(url_for("all_tasters"))
 
 # ==========================================================
 # ADD TASTER

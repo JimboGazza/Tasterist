@@ -443,6 +443,14 @@ body.login-page {
   text-transform: uppercase;
 }
 
+.login-version {
+  color: #8cbfa3;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  margin-top: 0.85rem;
+  text-align: right;
+}
+
 @media (max-width: 991px) {
   .login-shell {
     grid-template-columns: 1fr;
