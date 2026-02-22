@@ -119,13 +119,13 @@ async function handleWebhook(request, env) {
     return json({ error: "missing_required_fields" }, 400);
   }
 
-  const raw = buildMime({ fromHeader, to: toAddr, subject, text, html });
-  const message = new EmailMessage(fromAddr, toAddr, raw);
-
   const maxAttempts = 3;
   let lastErr = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
+      // EmailMessage body stream is single-use. Rebuild per attempt.
+      const raw = buildMime({ fromHeader, to: toAddr, subject, text, html });
+      const message = new EmailMessage(fromAddr, toAddr, raw);
       await env.TASTERIST_SEND.send(message);
       return json({ ok: true, to: toAddr, attempt });
     } catch (err) {
