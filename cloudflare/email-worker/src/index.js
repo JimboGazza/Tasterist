@@ -1,5 +1,3 @@
-import { EmailMessage } from "cloudflare:email";
-
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
@@ -11,48 +9,6 @@ function extractEmail(input) {
   const value = String(input || "").trim();
   const match = value.match(/<([^>]+)>/);
   return (match ? match[1] : value).trim().toLowerCase();
-}
-
-function escHtml(value) {
-  return String(value || "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
-}
-
-function mimePart(contentType, data) {
-  return (
-    `Content-Type: ${contentType}; charset=UTF-8\r\n` +
-    "Content-Transfer-Encoding: 8bit\r\n\r\n" +
-    `${data}\r\n`
-  );
-}
-
-function buildMime({ fromHeader, to, subject, text, html }) {
-  const boundary = `b-${crypto.randomUUID()}`;
-  const messageIdDomain = extractEmail(fromHeader).split("@")[1] || "tasterist.com";
-  const messageId = `<${crypto.randomUUID()}@${messageIdDomain}>`;
-  const nowRfc2822 = new Date().toUTCString();
-  const safeSubject = String(subject || "").replace(/\r|\n/g, " ").trim();
-  const plainText = String(text || "").trim();
-  const htmlBody = String(html || "").trim() || `<pre>${escHtml(plainText)}</pre>`;
-
-  return [
-    `From: ${fromHeader}`,
-    `To: ${to}`,
-    `Subject: ${safeSubject}`,
-    `Date: ${nowRfc2822}`,
-    `Message-ID: ${messageId}`,
-    "MIME-Version: 1.0",
-    `Content-Type: multipart/alternative; boundary="${boundary}"`,
-    "",
-    `--${boundary}`,
-    mimePart("text/plain", plainText || "No plain text body provided."),
-    `--${boundary}`,
-    mimePart("text/html", htmlBody),
-    `--${boundary}--`,
-    "",
-  ].join("\r\n");
 }
 
 function sleep(ms) {
@@ -77,6 +33,20 @@ function formatError(err) {
     parts.push(`cause=${String(err.cause)}`);
   }
   if (parts.length > 0) {
+    const propDump = {};
+    for (const key of Object.getOwnPropertyNames(err)) {
+      if (key === "stack") {
+        continue;
+      }
+      try {
+        propDump[key] = err[key];
+      } catch (_readErr) {
+        propDump[key] = "<unreadable>";
+      }
+    }
+    if (Object.keys(propDump).length > 0) {
+      parts.push(`props=${JSON.stringify(propDump)}`);
+    }
     return parts.join(": ");
   }
   try {
@@ -131,10 +101,13 @@ async function handleWebhook(request, env) {
   let lastErr = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      // EmailMessage body stream is single-use. Rebuild per attempt.
-      const raw = buildMime({ fromHeader, to: toAddr, subject, text, html });
-      const message = new EmailMessage(fromAddr, toAddr, raw);
-      await env.TASTERIST_SEND.send(message);
+      await env.TASTERIST_SEND.send({
+        from: fromAddr,
+        to: toAddr,
+        subject,
+        text: text || undefined,
+        html: html || undefined,
+      });
       return json({ ok: true, to: toAddr, attempt });
     } catch (err) {
       lastErr = err;

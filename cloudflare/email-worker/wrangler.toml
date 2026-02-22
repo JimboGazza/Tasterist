@@ -13,4 +13,4 @@ RENDER_CRON_URL = "https://tasterist.com/cron/weekly-admin-report"
 
 [[send_email]]
 name = "TASTERIST_SEND"
-destination_address = "james@penninegymnastics.com"
+allowed_destination_addresses = ["james@penninegymnastics.com"]
