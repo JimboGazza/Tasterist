@@ -113,7 +113,8 @@ async function handleWebhook(request, env) {
     return json({ error: "invalid_json" }, 400);
   }
 
-  const fromHeader = String(body?.from || env.DEFAULT_FROM || "").trim();
+  // Lock sender to configured default to avoid invalid/unverified From headers.
+  const fromHeader = String(env.DEFAULT_FROM || body?.from || "").trim();
   const fromAddr = extractEmail(fromHeader);
   const subject = String(body?.subject || "").trim();
   const text = String(body?.text || "").trim();
@@ -132,9 +133,7 @@ async function handleWebhook(request, env) {
     try {
       // EmailMessage body stream is single-use. Rebuild per attempt.
       const raw = buildMime({ fromHeader, to: toAddr, subject, text, html });
-      // For destination_address bindings, Cloudflare supports null/undefined
-      // recipient and resolves the bound destination automatically.
-      const message = new EmailMessage(fromAddr, null, raw);
+      const message = new EmailMessage(fromAddr, toAddr, raw);
       await env.TASTERIST_SEND.send(message);
       return json({ ok: true, to: toAddr, attempt });
     } catch (err) {
