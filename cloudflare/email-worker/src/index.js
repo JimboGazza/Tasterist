@@ -88,7 +88,14 @@ function formatError(err) {
 
 async function handleWebhook(request, env) {
   if (request.method === "GET") {
-    return json({ ok: true, service: "tasterist-email-webhook" });
+    const hasSendBinding = Boolean(env?.TASTERIST_SEND && typeof env.TASTERIST_SEND.send === "function");
+    return json({
+      ok: true,
+      service: "tasterist-email-webhook",
+      has_send_binding: hasSendBinding,
+      owner_email_set: Boolean(String(env?.OWNER_EMAIL || "").trim()),
+      default_from_set: Boolean(String(env?.DEFAULT_FROM || "").trim()),
+    });
   }
   if (request.method !== "POST") {
     return json({ error: "method_not_allowed" }, 405);
