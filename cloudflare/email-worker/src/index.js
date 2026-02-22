@@ -135,6 +135,7 @@ async function handleWebhook(request, env) {
       }
     }
   }
+  console.log(`send_email failed after ${maxAttempts} attempts: ${formatError(lastErr)}`);
   return json({ error: "send_failed", detail: formatError(lastErr) }, 502);
 }
 
